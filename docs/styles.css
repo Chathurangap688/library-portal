@@ -9,6 +9,10 @@ header {
   background: #1f4e46;
   color: white;
   padding: 12px 24px;
+  display: flex;                    /* Lesson 4: title left, sign-in right */
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 header h1 { margin: 0; font-size: 1.4rem; }
@@ -72,3 +76,16 @@ main { padding: 24px; }
 }
 
 #count { color: #676b68; font-size: 0.9rem; }
+
+/* Lesson 4: signed-in user box */
+#userBox { display: flex; align-items: center; gap: 8px; }
+#userBox[hidden] { display: none; }        /* hidden must win over display:flex */
+#userPicture { width: 32px; height: 32px; border-radius: 50%; }
+.role {
+  background: #c98a12; font-size: 0.7rem; padding: 2px 8px; border-radius: 999px;
+}
+.role:empty { display: none; }
+#signOutButton {
+  background: transparent; color: white; border: 1px solid rgba(255,255,255,.5);
+  border-radius: 999px; padding: 4px 12px; cursor: pointer;
+}

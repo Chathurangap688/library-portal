@@ -161,5 +161,87 @@ async function loadBooks() {
   }
 }
 
+// ------------------------------------------------------------------
+// Lesson 4: Google Sign-In
+// ------------------------------------------------------------------
+let idToken = null;       // the signed "ID card" Google gives us after sign-in
+let currentUser = null;   // { email, name, picture, role } — confirmed by OUR server
+
+// Send a POST to Apps Script. Content-Type text/plain keeps it a "simple"
+// request, so the browser does not send an extra CORS "preflight" (Apps Script can't answer those).
+async function callApi(action, params = {}) {
+  const body = Object.assign({ action: action, idToken: idToken }, params);
+  const response = await fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(body)
+  });
+  const data = await response.json();
+  if (!data.ok) throw new Error(data.error);
+  return data;
+}
+
+// Only for LEARNING: peek inside a JWT. This does NOT prove it is real —
+// anyone can make a fake one. The server checks it properly.
+function decodeJwtPayload(token) {
+  const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+  return JSON.parse(decodeURIComponent(escape(atob(part))));
+}
+
+// Google calls this after the user picks their account
+async function handleCredential(response) {
+  idToken = response.credential;
+  console.log('ID token claims (unverified):', decodeJwtPayload(idToken));
+
+  try {
+    const data = await callApi('me');       // server verifies + saves the user
+    currentUser = data.user;
+    showUser();
+  } catch (err) {
+    idToken = null;
+    alert('Sign-in failed: ' + err.message);
+  }
+}
+
+function showUser() {
+  const signedIn = currentUser !== null;
+  document.getElementById('signInButton').hidden = signedIn;
+  document.getElementById('userBox').hidden = !signedIn;
+  if (signedIn) {
+    document.getElementById('userPicture').src = currentUser.picture;
+    document.getElementById('userName').textContent = currentUser.name;   // textContent = always safe
+    document.getElementById('userRole').textContent = currentUser.role === 'admin' ? 'Admin' : '';
+  }
+}
+
+function signOut() {
+  idToken = null;
+  currentUser = null;
+  google.accounts.id.disableAutoSelect();   // don't auto sign-in again on next visit
+  showUser();
+}
+
+function initGoogleSignIn() {
+  if (!GOOGLE_CLIENT_ID || !API_URL) return;   // not configured yet
+
+  // The Google script loads separately — wait until it is ready
+  if (!window.google || !google.accounts) {
+    setTimeout(initGoogleSignIn, 100);
+    return;
+  }
+
+  google.accounts.id.initialize({
+    client_id: GOOGLE_CLIENT_ID,
+    callback: handleCredential,     // our function above
+    auto_select: true               // returning users are signed in automatically
+  });
+  google.accounts.id.renderButton(document.getElementById('signInButton'),
+    { theme: 'outline', size: 'medium', shape: 'pill' });
+  google.accounts.id.prompt();      // shows the "One Tap" popup
+}
+
+document.getElementById('signOutButton').addEventListener('click', signOut);
+
 // First load when the page opens
 loadBooks();
+initGoogleSignIn();

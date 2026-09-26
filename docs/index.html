@@ -8,10 +8,23 @@
   <!-- defer = download now, but run only after the whole page is built -->
   <script src="config.js" defer></script>
   <script src="app.js" defer></script>
+  <!-- Lesson 4: Google's sign-in library -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
   <header>
     <h1>My Library</h1>
+
+    <!-- Lesson 4: shown when signed OUT — Google draws its button in here -->
+    <div id="signInButton"></div>
+
+    <!-- Lesson 4: shown when signed IN -->
+    <div id="userBox" hidden>
+      <img id="userPicture" alt="" referrerpolicy="no-referrer">
+      <span id="userName"></span>
+      <span id="userRole" class="role"></span>
+      <button id="signOutButton" type="button">Sign out</button>
+    </div>
   </header>
 
   <main>
