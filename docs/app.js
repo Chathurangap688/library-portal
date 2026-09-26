@@ -134,6 +134,7 @@ function applyFilters() {
   const searchKey = singlishKey(searchText);         // Lesson 7c: spelling-tolerant version
   const language = document.getElementById('language').value;
   const onlyTranslations = document.getElementById('onlyTranslations').checked;
+  const pickedCategories = selectedFilterCategories();
 
   const result = books.filter(book => {
     // 1. Search: exact text (works for Sinhala typing) OR the loose Singlish key
@@ -147,8 +148,12 @@ function applyFilters() {
     // 3. Translation checkbox: if not ticked, every book passes
     const matchesTranslation = !onlyTranslations || book.isTranslation;
 
+    // 4. Categories: none ticked = all books; otherwise the book needs at least ONE ticked category
+    const matchesCategory = pickedCategories.length === 0 ||
+      (book.categories || []).some(c => pickedCategories.includes(c));
+
     // Keep the book only if ALL three checks pass
-    return matchesSearch && matchesLanguage && matchesTranslation;
+    return matchesSearch && matchesLanguage && matchesTranslation && matchesCategory;
   });
 
   document.getElementById('count').textContent = `Showing ${result.length} of ${books.length} books`;
@@ -159,6 +164,59 @@ function applyFilters() {
 document.getElementById('search').addEventListener('input', applyFilters);   // every key press
 document.getElementById('language').addEventListener('change', applyFilters);
 document.getElementById('onlyTranslations').addEventListener('change', applyFilters);
+
+// ------------------------------------------------------------------
+// Category filter (multi-select dropdown)
+// ------------------------------------------------------------------
+
+// Build the options from the categories books REALLY have (with a count),
+// so you never pick a category that gives 0 results.
+function buildCategoryFilter() {
+  const before = selectedFilterCategories();            // keep ticks when we rebuild
+  const counts = {};
+  books.forEach(b => (b.categories || []).forEach(c => { counts[c] = (counts[c] || 0) + 1; }));
+  const names = Object.keys(counts).sort((a, b) => a.localeCompare(b));
+
+  document.getElementById('categoryOptions').innerHTML = names.length
+    ? names.map(c => `
+      <label class="multi-option">
+        <input type="checkbox" value="${escapeHtml(c)}" ${before.includes(c) ? 'checked' : ''}>
+        ${escapeHtml(c)} <small>(${counts[c]})</small>
+      </label>`).join('')
+    : '<small>No categories yet</small>';
+  updateCategorySummary();
+}
+
+function selectedFilterCategories() {
+  return [...document.querySelectorAll('#categoryOptions input:checked')].map(i => i.value);
+}
+
+// The text on the closed dropdown: "All categories", "Novel", or "Novel +2"
+function updateCategorySummary() {
+  const picked = selectedFilterCategories();
+  const summary = document.getElementById('categorySummary');
+  summary.textContent = picked.length === 0 ? 'All categories'
+    : picked.length === 1 ? picked[0] : `${picked[0]} +${picked.length - 1}`;
+  summary.classList.toggle('active', picked.length > 0);
+}
+
+// One listener for all checkboxes inside the panel (event delegation again)
+document.getElementById('categoryOptions').addEventListener('change', () => {
+  updateCategorySummary();
+  applyFilters();
+});
+
+document.getElementById('clearCategories').addEventListener('click', () => {
+  document.querySelectorAll('#categoryOptions input:checked').forEach(i => { i.checked = false; });
+  updateCategorySummary();
+  applyFilters();
+});
+
+// Close the dropdown when you click anywhere outside it
+document.addEventListener('click', event => {
+  const box = document.getElementById('categoryFilter');
+  if (box.open && !box.contains(event.target)) box.open = false;
+});
 
 // ------------------------------------------------------------------
 // Lesson 7c: Singlish search
@@ -249,6 +307,7 @@ async function loadBooks() {
 
   if (!API_URL) {                       // no backend yet → use sample data
     books = sampleBooks;
+    buildCategoryFilter();
     count.textContent = 'Using sample data (set API_URL in config.js)';
     applyFilters();
     return;
@@ -266,6 +325,7 @@ async function loadBooks() {
     if (!data.ok) throw new Error(data.error || 'Server error');
     books = data.books;                           // 3. store the list
     allCategories = data.categories || [];
+    buildCategoryFilter();
     applyFilters();                               // 4. draw it
   } catch (err) {
     // Network down, wrong URL, script error… show it instead of a blank page

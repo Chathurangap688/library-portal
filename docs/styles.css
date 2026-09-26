@@ -208,3 +208,33 @@ dialog h2 { margin-top: 0; }
 #webStatus { font-size: 0.85rem; color: #676b68; }
 .desc { line-height: 1.5; }
 .sources a { color: #1f4e46; }
+
+/* ---------- Category multi-select filter ---------- */
+.multi-select { position: relative; }
+.multi-select summary {
+  list-style: none;                       /* hide the default ▶ triangle */
+  cursor: pointer; user-select: none; white-space: nowrap;
+  padding: 10px 32px 10px 12px; font-size: 1rem; background: white;
+  border: 1px solid #767676; border-radius: 8px; position: relative;
+}
+.multi-select summary::-webkit-details-marker { display: none; }   /* Safari's triangle */
+.multi-select summary::after {            /* our own ▾ arrow */
+  content: '▾'; position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+}
+.multi-select summary.active { background: #1f4e46; color: white; border-color: #1f4e46; }
+.multi-panel {
+  position: absolute; z-index: 20; top: calc(100% + 4px); left: 0;
+  min-width: 240px; max-height: 320px; overflow-y: auto;
+  background: white; border: 1px solid #ddd6c8; border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.15); padding: 8px;
+}
+.multi-option { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.multi-option:hover { background: #f6f3ec; }
+.multi-option small { color: #676b68; }
+#clearCategories {
+  margin-top: 6px; width: 100%; background: none; border: 1px solid #ddd6c8;
+  border-radius: 6px; padding: 6px; cursor: pointer;
+}
+@media (max-width: 480px) {
+  .multi-panel { left: auto; right: 0; }  /* keep the panel on screen on phones */
+}

@@ -40,6 +40,15 @@
         <option value="Tamil">Tamil</option>
       </select>
 
+      <!-- Category filter: multi-select dropdown. <details> opens/closes by itself, no JS needed -->
+      <details id="categoryFilter" class="multi-select">
+        <summary id="categorySummary">All categories</summary>
+        <div class="multi-panel">
+          <div id="categoryOptions"></div>
+          <button type="button" id="clearCategories">Clear</button>
+        </div>
+      </details>
+
       <label>
         <input id="onlyTranslations" type="checkbox"> Translations only
       </label>
