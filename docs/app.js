@@ -51,6 +51,19 @@ const books = [
 ];
 
 // ------------------------------------------------------------------
+// Lesson 2: make text SAFE before putting it inside HTML.
+// '<b>Hi</b>' becomes '&lt;b&gt;Hi&lt;/b&gt;' so the browser shows it as text.
+// ------------------------------------------------------------------
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// ------------------------------------------------------------------
 // Turn ONE book object into a piece of HTML (a "card").
 // ------------------------------------------------------------------
 function bookCard(book) {
@@ -60,10 +73,10 @@ function bookCard(book) {
   // Backticks (`) make a template string: ${...} inserts a value.
   return `
     <div class="book">
-      <div class="cover">${book.title}</div>
-      <div class="title">${book.title}</div>
-      <div class="author">${book.author}</div>
-      <div class="meta">${book.language} · ${book.categories.join(', ')}</div>
+      <div class="cover">${escapeHtml(book.title)}</div>
+      <div class="title">${escapeHtml(book.title)}</div>
+      <div class="author">${escapeHtml(book.author)}</div>
+      <div class="meta">${escapeHtml(book.language)} · ${escapeHtml(book.categories.join(', '))}</div>
       ${badge}
     </div>
   `;
@@ -84,5 +97,37 @@ function renderBooks(list) {
   grid.innerHTML = list.map(bookCard).join('');
 }
 
-// Run it once when the page loads
-renderBooks(books.filter(book => book.language === 'English'));  // show only English books
+// ------------------------------------------------------------------
+// Lesson 2: read the controls, keep only the matching books, draw them.
+// ------------------------------------------------------------------
+function applyFilters() {
+  const searchText = document.getElementById('search').value.trim().toLowerCase();
+  const language = document.getElementById('language').value;
+  const onlyTranslations = document.getElementById('onlyTranslations').checked;
+
+  const result = books.filter(book => {
+    // 1. Search: look in title, author and categories together
+    const haystack = (book.title + ' ' + book.author + ' ' + book.categories.join(' ')).toLowerCase();
+    const matchesSearch = haystack.includes(searchText);   // '' matches everything
+
+    // 2. Language: empty value means "All languages"
+    const matchesLanguage = language === '' || book.language === language;
+
+    // 3. Translation checkbox: if not ticked, every book passes
+    const matchesTranslation = !onlyTranslations || book.isTranslation;
+
+    // Keep the book only if ALL three checks pass
+    return matchesSearch && matchesLanguage && matchesTranslation;
+  });
+
+  document.getElementById('count').textContent = `Showing ${result.length} of ${books.length} books`;
+  renderBooks(result);
+}
+
+// Re-run the filter every time the user changes something
+document.getElementById('search').addEventListener('input', applyFilters);   // every key press
+document.getElementById('language').addEventListener('change', applyFilters);
+document.getElementById('onlyTranslations').addEventListener('change', applyFilters);
+
+// First draw when the page loads
+applyFilters();

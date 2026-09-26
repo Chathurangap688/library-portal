@@ -48,3 +48,27 @@ main { padding: 24px; }
   border-radius: 999px;
   margin-top: 4px;
 }
+
+/* Lesson 2: search bar row */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;          /* wrap onto a new line on small screens */
+  gap: 12px;
+  align-items: center;
+}
+
+.toolbar input[type="search"] {
+  flex: 1 1 260px;          /* grow to fill space, but at least 260px */
+  padding: 10px;
+  font-size: 1rem;
+  border: 1px solid #ddd6c8;
+  border-radius: 8px;
+}
+
+.toolbar select {
+  padding: 10px;
+  font-size: 1rem;
+  border-radius: 8px;
+}
+
+#count { color: #676b68; font-size: 0.9rem; }
