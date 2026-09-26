@@ -39,6 +39,14 @@ const books = [
     categories: ['Self-help'],
     isTranslation: true,
     language: 'Tamil'
+  },
+  {
+    id: 'book6',
+    title: 'Book 6',
+    author: 'Author 6',
+    categories: ['Science'],
+    isTranslation: false,
+    language: 'English'
   }
 ];
 
@@ -77,4 +85,4 @@ function renderBooks(list) {
 }
 
 // Run it once when the page loads
-renderBooks(books);
+renderBooks(books.filter(book => book.language === 'English'));  // show only English books
