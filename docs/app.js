@@ -376,6 +376,7 @@ async function handleCredential(response) {
     showUser();
     if (isAdmin()) await loadBooks();       // Lesson 6: reload with admin-only fields
     applyFilters();                         // redraw cards with my status labels
+    loadRecommendations();                  // Lesson 8 (no await: the page does not wait for it)
   } catch (err) {
     idToken = null;
     alert('Sign-in failed: ' + err.message);
@@ -402,6 +403,7 @@ function signOut() {
   google.accounts.id.disableAutoSelect();   // don't auto sign-in again on next visit
   showUser();
   applyFilters();
+  document.getElementById('recommendSection').hidden = true;   // Lesson 8
 }
 
 function initGoogleSignIn() {
@@ -506,6 +508,7 @@ dialog.addEventListener('click', async event => {
       else myData.status[openBookId] = newStatus;
       openBook(openBookId);   // redraw popup (highlights the new button)
       applyFilters();         // redraw cards (status label)
+      loadRecommendations();  // Lesson 8: my history changed → new suggestions
     } catch (err) { alert(err.message); }
     return;
   }
@@ -526,6 +529,7 @@ dialog.addEventListener('click', async event => {
       await callApi('rateBook', { bookId: openBookId, rating: chosenRating, review: review });
       myData.ratings[openBookId] = { rating: chosenRating, review: review };
       await loadBooks();      // reload so the average and review list include mine
+      loadRecommendations();  // Lesson 8
       openBook(openBookId);
     } catch (err) {
       alert(err.message);
@@ -938,6 +942,40 @@ document.getElementById('webButton').addEventListener('click', async () => {
   } finally {
     button.disabled = false;
   }
+});
+
+// ------------------------------------------------------------------
+// Lesson 8: "Recommended for you" row
+// ------------------------------------------------------------------
+async function loadRecommendations() {
+  const section = document.getElementById('recommendSection');
+  if (!currentUser) { section.hidden = true; return; }
+  try {
+    const data = await callApi('recommend');
+    // The server sends only { bookId, score, reason } → look up the full book here
+    const items = data.recommendations
+      .map(r => ({ book: books.find(b => String(b.id) === r.bookId), reason: r.reason }))
+      .filter(item => item.book);                  // skip if the book is not in our list
+    section.hidden = items.length === 0;
+    document.getElementById('recommendRow').innerHTML =
+      items.map(item => bookCard(item.book)).join('');    // reuse the Lesson 1 card…
+    // …and add the reason under each card
+    document.querySelectorAll('#recommendRow .book').forEach((card, i) => {
+      const p = document.createElement('p');
+      p.className = 'reason';
+      p.textContent = items[i].reason;           // textContent → safe, no escaping needed
+      card.appendChild(p);
+    });
+  } catch (err) {
+    console.error('Recommendations failed:', err);
+    section.hidden = true;                         // a "nice to have" — never break the page
+  }
+}
+
+// Clicking a recommended card opens the same popup as the grid
+document.getElementById('recommendRow').addEventListener('click', event => {
+  const card = event.target.closest('.book');
+  if (card) openBook(card.dataset.id);
 });
 
 // First load when the page opens

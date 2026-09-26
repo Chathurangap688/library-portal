@@ -238,3 +238,16 @@ dialog h2 { margin-top: 0; }
 @media (max-width: 480px) {
   .multi-panel { left: auto; right: 0; }  /* keep the panel on screen on phones */
 }
+
+/* ---------- Lesson 8: recommendations row ---------- */
+#recommendSection { margin: 20px 0 8px; }
+#recommendSection[hidden] { display: none; }
+#recommendSection h2 { font-size: 1.1rem; margin: 0 0 10px; }
+.rec-row {
+  display: grid; grid-auto-flow: column;            /* one row that scrolls sideways */
+  grid-auto-columns: 150px; gap: 16px;
+  overflow-x: auto; padding-bottom: 8px;
+  scroll-snap-type: x mandatory;                     /* swipe stops neatly on a card */
+}
+.rec-row .book { scroll-snap-align: start; }
+.reason { font-size: 0.75rem; color: #1f4e46; font-weight: bold; margin: 4px 0 0; }

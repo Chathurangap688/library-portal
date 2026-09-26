@@ -89,6 +89,9 @@ function doPost(e) {
     if (request.action === 'rateBook') {
       return jsonResponse({ ok: true, result: rateBook(user, request.bookId, request.rating, request.review) });
     }
+    if (request.action === 'recommend') {                 // Lesson 8
+      return jsonResponse({ ok: true, recommendations: recommendBooks(user.email, 8) });
+    }
 
 
     // ---- Lesson 6: admin-only actions ----
@@ -655,4 +658,120 @@ function webLookup(input) {
   // Keep only categories from our list
   info.categories = (info.categories || []).filter(c => BOOK_CATEGORIES.includes(c));
   return info;
+}
+
+
+// =====================================================================
+// Lesson 8: Recommendations
+//
+// Three ideas, added together into one score per unread book:
+//   1. CONTENT  — "more like what you liked": same author, translator, category, language
+//   2. PEOPLE   — "readers who liked what you liked also liked this" (collaborative filtering)
+//   3. POPULAR  — well-rated by everyone (also the answer for brand-new users)
+// Runs on the SERVER because only the server may see everyone's reading history.
+// =====================================================================
+
+function recommendBooks(myEmail, howMany) {
+  const books = readBooks();
+  addRatingsToBooks(books);
+  const byId = {};
+  books.forEach(b => { byId[String(b.id)] = b; });
+
+  const reading = readRows(getSheet('Reading', ['email', 'bookId', 'status', 'updatedAt']));
+  const ratings = readRows(getSheet('Ratings', ['bookId', 'email', 'userName', 'rating', 'review', 'updatedAt']));
+
+  // ---- How much does EACH user like EACH book?  likes[email][bookId] = number ----
+  // rating 5 → +2, 4 → +1, 3 → 0, 2 → -1, 1 → -2.  "Read" without a rating → +1, "Reading" → +0.5
+  const likes = {};
+  const like = (email, bookId, value) => {
+    likes[email] = likes[email] || {};
+    likes[email][String(bookId)] = value;
+  };
+  reading.forEach(r => like(r.email, r.bookId, r.status === 'read' ? 1 : 0.5));
+  ratings.forEach(r => like(r.email, r.bookId, Number(r.rating) - 3));    // a rating overrides status
+
+  const mine = likes[myEmail] || {};
+  const seen = id => mine[id] !== undefined;          // already read / reading / rated → skip
+  const likedIds = Object.keys(mine).filter(id => mine[id] > 0 && byId[id]);
+
+  // ---- 1. CONTENT: build my "taste profile" from the books I liked ----
+  const taste = {};                                    // e.g. { 'cat:Novel': 3, 'author:gunasekara': 2 }
+  const add = (key, w) => { if (key) taste[key] = (taste[key] || 0) + w; };
+  Object.keys(mine).forEach(id => {
+    const b = byId[id];
+    if (!b) return;
+    const w = mine[id];                                // disliked books push their features DOWN
+    featuresOf(b).forEach(f => add(f, w));
+  });
+
+  // ---- 2. PEOPLE: who likes the same books as me? ----
+  const similarity = {};                               // similarity[otherEmail] = how alike we are
+  Object.keys(likes).forEach(other => {
+    if (other === myEmail) return;
+    let score = 0;
+    likedIds.forEach(id => { if (likes[other][id] > 0) score += 1; });
+    if (score > 0) similarity[other] = score;
+  });
+
+  // ---- Score every book I have not seen ----
+  const results = [];
+  books.forEach(b => {
+    const id = String(b.id);
+    if (seen(id)) return;
+
+    let content = 0, bestFeature = null, bestWeight = 0;
+    featuresOf(b).forEach(f => {
+      const w = (taste[f] || 0) * featureWeight(f);
+      content += w;
+      if (w > bestWeight) { bestWeight = w; bestFeature = f; }
+    });
+
+    let people = 0, fans = 0;
+    Object.keys(similarity).forEach(other => {
+      if (likes[other][id] > 0) { people += similarity[other] * likes[other][id]; fans++; }
+    });
+
+    // "Bayesian average": a book with ONE 5-star rating should not beat one with twenty 4.5s.
+    // Pretend every book starts with 3 votes of 3.5 stars.
+    const popular = ((b.ratingAvg * b.ratingCount) + 3.5 * 3) / (b.ratingCount + 3) - 3.5;
+
+    const score = content + 1.5 * people + 0.8 * popular;
+    if (score <= 0 && likedIds.length > 0) return;     // nothing in common with my taste
+
+    results.push({ bookId: id, score: Math.round(score * 100) / 100,
+      reason: reasonText(bestFeature, fans, b, likedIds.length === 0) });
+  });
+
+  results.sort((a, b) => b.score - a.score);           // highest score first
+  return results.slice(0, howMany);
+}
+
+/** The "features" of a book, as short text keys. */
+function featuresOf(book) {
+  const list = [];
+  const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9\u0D80-\u0DFF]+/g, '');
+  (book.categories || []).forEach(c => list.push('cat:' + c));
+  if (book.author) list.push('author:' + norm(book.author));
+  if (book.translator) list.push('translator:' + norm(book.translator));
+  if (book.language) list.push('lang:' + book.language);
+  return list;
+}
+
+/** Same author matters more than same language. */
+function featureWeight(feature) {
+  if (feature.startsWith('author:')) return 2;
+  if (feature.startsWith('translator:')) return 1.5;
+  if (feature.startsWith('cat:')) return 1;
+  return 0.3;                                          // language
+}
+
+/** A short human explanation — people trust recommendations more when they know WHY. */
+function reasonText(feature, fans, book, newUser) {
+  if (newUser) return book.ratingCount ? 'Popular in the library' : 'New in the library';
+  if (fans >= 2) return fans + ' readers with your taste liked this';
+  if (feature && feature.startsWith('author:')) return 'More by ' + book.author;
+  if (feature && feature.startsWith('translator:')) return 'Also translated by ' + book.translator;
+  if (fans === 1) return 'A reader with your taste liked this';
+  if (feature && feature.startsWith('cat:')) return 'Because you like ' + feature.slice(4);
+  return 'Popular in the library';
 }
