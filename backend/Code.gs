@@ -465,7 +465,9 @@ function callGemini(prompt, imageBase64, mimeType, schema) {
   const props = PropertiesService.getScriptProperties();
   const apiKey = props.getProperty('GEMINI_API_KEY');
   if (!apiKey) throw new Error('GEMINI_API_KEY is not set in Script properties');
-  const model = props.getProperty('GEMINI_MODEL') || 'gemini-flash-latest';
+  // Lesson 7b: a list of models to try. If the first is busy (503) or out of free quota (429),
+  // we try the next one. Each model has its own free quota.
+  const models = [props.getProperty('GEMINI_MODEL') || 'gemini-flash-latest', 'gemini-flash-lite-latest'];
 
   const body = {
     contents: [{
@@ -481,18 +483,33 @@ function callGemini(prompt, imageBase64, mimeType, schema) {
     }
   };
 
-  const res = UrlFetchApp.fetch(
-    'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent', {
-      method: 'post',
-      contentType: 'application/json',
-      headers: { 'x-goog-api-key': apiKey },    // the key goes in a header, never in the browser
-      payload: JSON.stringify(body),
-      muteHttpExceptions: true                  // let US handle errors instead of crashing
-    });
+  let res = null, code = 0;
+  tryModels:
+  for (const model of models) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      res = UrlFetchApp.fetch(
+        'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent', {
+          method: 'post',
+          contentType: 'application/json',
+          headers: { 'x-goog-api-key': apiKey },    // the key goes in a header, never in the browser
+          payload: JSON.stringify(body),
+          muteHttpExceptions: true                  // let US handle errors instead of crashing
+        });
+      code = res.getResponseCode();
+      if (code === 200) break tryModels;            // success → leave BOTH loops
+      if (code === 429) break;                      // this model's quota is used up → next model
+      if (code !== 503 && code !== 500) break tryModels;   // a real error (bad key…) → stop
+      // 503/500 = "busy right now": wait 1 s, 2 s, 4 s ("exponential backoff"), then retry
+      Utilities.sleep(1000 * Math.pow(2, attempt - 1));
+    }
+  }
 
-  const code = res.getResponseCode();
-  if (code === 429) throw new Error('AI free limit reached. Wait a minute and try again, or type the details.');
-  if (code !== 200) throw new Error('Gemini error ' + code + ': ' + res.getContentText().slice(0, 200));
+  // Friendly messages for the user; details go to the Apps Script log (Executions)
+  if (code !== 200) console.error('Gemini ' + code + ': ' + res.getContentText().slice(0, 500));
+  if (code === 429) throw new Error('AI free limit reached for today. Try again later, or type the details.');
+  if (code === 503 || code === 500) throw new Error('The AI is very busy right now. Wait a minute and tap "Read cover" again.');
+  if (code === 400 || code === 403) throw new Error('The AI rejected the request (check GEMINI_API_KEY).');
+  if (code !== 200) throw new Error('AI error ' + code + '. See Executions log in Apps Script.');
 
   // The answer is nested: candidates[0].content.parts[].text  (the text IS our JSON)
   const answer = JSON.parse(res.getContentText());

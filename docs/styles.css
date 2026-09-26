@@ -103,6 +103,7 @@ main { padding: 24px; }
 .status.read { background: #c98a12; color: white; }
 
 dialog {
+  box-sizing: border-box;          /* 7b fix: width INCLUDES padding → no overflow on phones */
   border: none; border-radius: 14px; padding: 24px;
   width: min(560px, calc(100vw - 32px)); max-height: 85vh;
 }
@@ -173,3 +174,11 @@ dialog h2 { margin-top: 0; }
 #aiStatus { font-size: 0.85rem; color: #676b68; margin: 8px 0 0; }
 .ai-filled { animation: aiFlash 1.5s ease; }
 @keyframes aiFlash { 0% { background: #fff1c7; } 100% { background: white; } }
+
+/* ---------- Lesson 7b: phone fixes ---------- */
+@media (max-width: 480px) {
+  dialog { padding: 16px; width: calc(100vw - 16px); max-height: 92vh; }
+  #bookForm .two { grid-template-columns: 1fr; }    /* one column on small screens */
+}
+.photo-box { grid-template-columns: 110px minmax(0, 1fr); }   /* minmax(0,…) lets long text wrap */
+#aiStatus { overflow-wrap: anywhere; }
