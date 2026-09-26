@@ -318,7 +318,8 @@ const BOOK_FIELDS = ['id', 'title', 'author', 'categories', 'isTranslation', 'la
   'isbn', 'publisher', 'year', 'shelf',
   'purchasedFrom', 'purchaseDate', 'price', 'notes',
   'addedBy', 'addedAt', 'updatedAt',
-  'coverUrl', 'coverFileId'];                        // Lesson 7
+  'coverUrl', 'coverFileId',                         // Lesson 7
+  'titleSinglish', 'authorSinglish'];                 // Lesson 7c: for English-keyboard search
 
 // Only admins see these (removed from the public doGet answer)
 const PRIVATE_FIELDS = ['purchasedFrom', 'purchaseDate', 'price', 'notes', 'addedBy'];
@@ -360,7 +361,7 @@ function saveBook(user, input, imageBase64) {
 
   const book = Object.assign({}, existing);
   // Copy ONLY known, editable fields from the browser (never trust extra keys)
-  ['title', 'author', 'language', 'isbn', 'publisher', 'year', 'shelf',
+  ['title', 'author', 'titleSinglish', 'authorSinglish', 'language', 'isbn', 'publisher', 'year', 'shelf',
    'purchasedFrom', 'purchaseDate', 'price', 'notes', 'coverUrl'].forEach(f => {
     book[f] = String(input[f] || '').trim().slice(0, 2000);
   });
@@ -417,6 +418,10 @@ function analyzeCover(imageBase64, mimeType) {
   const prompt = [
     'This is a photo of a book cover from an office library in Sri Lanka.',
     'Read the text on the cover exactly as printed.',
+    'If the title or author is NOT in English letters (Sinhala, Tamil...), also give titleSinglish and',
+    'authorSinglish: the same words written in English letters the way Sri Lankans type them in chat',
+    '(e.g. "මඩොල් දූව" → "Madol Doowa", "මාර්ටින් වික්‍රමසිංහ" → "Martin Wickramasinghe").',
+    'If the title is already in English letters, leave titleSinglish and authorSinglish empty.',
     'language = the language the book is written in (e.g. English, Sinhala, Tamil).',
     'isTranslation = true only if the cover says it is translated (e.g. "translated by", "පරිවර්තනය").',
     'Give 1 to 3 short categories such as Fiction, History, Programming, Self-help, Biography.',
@@ -433,6 +438,8 @@ function analyzeCover(imageBase64, mimeType) {
     properties: {
       title: { type: 'STRING' },
       author: { type: 'STRING' },
+      titleSinglish: { type: 'STRING' },
+      authorSinglish: { type: 'STRING' },
       categories: { type: 'ARRAY', items: { type: 'STRING' } },
       language: { type: 'STRING' },
       isTranslation: { type: 'BOOLEAN' },

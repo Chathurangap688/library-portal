@@ -130,13 +130,15 @@ function renderBooks(list) {
 // ------------------------------------------------------------------
 function applyFilters() {
   const searchText = document.getElementById('search').value.trim().toLowerCase();
+  const searchKey = singlishKey(searchText);         // Lesson 7c: spelling-tolerant version
   const language = document.getElementById('language').value;
   const onlyTranslations = document.getElementById('onlyTranslations').checked;
 
   const result = books.filter(book => {
-    // 1. Search: look in title, author and categories together
-    const haystack = (book.title + ' ' + book.author + ' ' + book.categories.join(' ')).toLowerCase();
-    const matchesSearch = haystack.includes(searchText);   // '' matches everything
+    // 1. Search: exact text (works for Sinhala typing) OR the loose Singlish key
+    const matchesSearch = searchText === '' ||
+      searchHaystack(book).includes(searchText) ||
+      (searchKey !== '' && searchKeyOf(book).includes(searchKey));
 
     // 2. Language: empty value means "All languages"
     const matchesLanguage = language === '' || book.language === language;
@@ -156,6 +158,85 @@ function applyFilters() {
 document.getElementById('search').addEventListener('input', applyFilters);   // every key press
 document.getElementById('language').addEventListener('change', applyFilters);
 document.getElementById('onlyTranslations').addEventListener('change', applyFilters);
+
+// ------------------------------------------------------------------
+// Lesson 7c: Singlish search
+// Someone without a Sinhala keyboard types "horowpothane" and should still find
+// "හොරොව්පොතානේ". Two tricks:
+//   1. transliterate Sinhala letters → English letters automatically (works for EVERY book)
+//      plus the titleSinglish/authorSinglish the AI (or you) saved
+//   2. compare a loose "key" so different spellings match: thaa/ta, w/v, ee/e ...
+// ------------------------------------------------------------------
+
+// All the text we search in, for one book (lower case)
+function searchHaystack(book) {
+  return [book.title, book.author, book.titleSinglish, book.authorSinglish,
+    (book.categories || []).join(' ')].join(' ').toLowerCase();
+}
+
+// The loose key of a book — calculated once, then remembered on the book object
+function searchKeyOf(book) {
+  if (book._key === undefined) {
+    book._key = singlishKey(searchHaystack(book) + ' ' + sinhalaToLatin(book.title) + ' ' + sinhalaToLatin(book.author));
+  }
+  return book._key;
+}
+
+/**
+ * Make spelling differences disappear, so these all give the same key:
+ *   "Horowpothane" "horowupothaane" "Horovpotane"  → "horowpotane"
+ */
+function singlishKey(text) {
+  return String(text || '').toLowerCase()
+    .replace(/th/g, 't').replace(/dh/g, 'd').replace(/kh/g, 'k').replace(/gh/g, 'g')
+    .replace(/ph/g, 'p').replace(/bh/g, 'b').replace(/sh/g, 's').replace(/ch/g, 'c')
+    .replace(/v/g, 'w')
+    .replace(/[^a-z0-9]/g, '')        // drop spaces, dots, Sinhala letters...
+    .replace(/(.)\1+/g, '$1');         // "aa" → "a", "ee" → "e", "kk" → "k"
+}
+
+// ---- Sinhala → Latin letters (simple, rule-based) ----
+// Each consonant carries an "a" sound (ක = ka). A vowel sign REPLACES that "a"
+// (කි = ki), and the hal mark ් removes it (ක් = k).
+const SI_CONSONANTS = {
+  'ක': 'k', 'ඛ': 'kh', 'ග': 'g', 'ඝ': 'gh', 'ඞ': 'ng', 'ඟ': 'ng', 'ච': 'ch', 'ඡ': 'chh',
+  'ජ': 'j', 'ඣ': 'jh', 'ඤ': 'ny', 'ඥ': 'gn', 'ට': 't', 'ඨ': 'th', 'ඩ': 'd', 'ඪ': 'dh',
+  'ණ': 'n', 'ඬ': 'nd', 'ත': 'th', 'ථ': 'th', 'ද': 'd', 'ධ': 'dh', 'න': 'n', 'ඳ': 'nd',
+  'ප': 'p', 'ඵ': 'ph', 'බ': 'b', 'භ': 'bh', 'ම': 'm', 'ඹ': 'mb', 'ය': 'y', 'ර': 'r',
+  'ල': 'l', 'ව': 'w', 'ශ': 'sh', 'ෂ': 'sh', 'ස': 's', 'හ': 'h', 'ළ': 'l', 'ෆ': 'f'
+};
+const SI_VOWELS = {
+  'අ': 'a', 'ආ': 'aa', 'ඇ': 'ae', 'ඈ': 'aae', 'ඉ': 'i', 'ඊ': 'ii', 'උ': 'u', 'ඌ': 'uu',
+  'ඍ': 'ru', 'එ': 'e', 'ඒ': 'ee', 'ඓ': 'ai', 'ඔ': 'o', 'ඕ': 'oo', 'ඖ': 'au'
+};
+const SI_SIGNS = {
+  'ා': 'aa', 'ැ': 'ae', 'ෑ': 'aae', 'ි': 'i', 'ී': 'ii', 'ු': 'u', 'ූ': 'uu', 'ෘ': 'ru',
+  'ෙ': 'e', 'ේ': 'ee', 'ෛ': 'ai', 'ො': 'o', 'ෝ': 'oo', 'ෞ': 'au', 'ෲ': 'ruu'
+};
+
+function sinhalaToLatin(text) {
+  const chars = [...String(text || '').normalize('NFC')];   // NFC joins "ෙ + ා" into "ො"
+  let out = '';
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i], next = chars[i + 1];
+    if (SI_CONSONANTS[ch]) {
+      out += SI_CONSONANTS[ch];
+      if (next === '්') { i++; }                          // hal mark: no vowel
+      else if (SI_SIGNS[next]) { out += SI_SIGNS[next]; i++; }
+      else if (next === '\u200d') { /* joiner in ක්‍ර etc. — ignore */ }
+      else { out += 'a'; }                               // default "a" sound
+    } else if (SI_VOWELS[ch]) {
+      out += SI_VOWELS[ch];
+    } else if (ch === 'ං') {
+      out += 'n';
+    } else if (ch === '\u200d' || ch === '්') {
+      // ignore
+    } else {
+      out += ch;                                         // spaces, English letters, numbers
+    }
+  }
+  return out;
+}
 
 // ------------------------------------------------------------------
 // Lesson 3: download the books from the Google Sheet (via Apps Script).
@@ -418,7 +499,7 @@ function openEditor(bookId) {
 
   if (book) {
     // form.elements.title = the <input name="title">
-    ['id', 'title', 'author', 'language', 'isbn', 'publisher', 'year', 'shelf',
+    ['id', 'title', 'author', 'titleSinglish', 'authorSinglish', 'language', 'isbn', 'publisher', 'year', 'shelf',
      'purchasedFrom', 'price', 'notes', 'coverUrl'].forEach(name => {
       form.elements[name].value = book[name] || '';
     });
@@ -443,6 +524,8 @@ form.addEventListener('submit', async event => {
     id: f.id.value,
     title: f.title.value,
     author: f.author.value,
+    titleSinglish: f.titleSinglish.value,
+    authorSinglish: f.authorSinglish.value,
     categories: f.categories.value.split(',').map(c => c.trim()).filter(c => c),
     language: f.language.value,
     isTranslation: f.isTranslation.checked,
@@ -658,6 +741,8 @@ function fillFormFromAi(draft) {
   };
   set('title', draft.title);
   set('author', draft.author);
+  set('titleSinglish', draft.titleSinglish);
+  set('authorSinglish', draft.authorSinglish);
   set('categories', (draft.categories || []).join(', '));
   set('isbn', draft.isbn);
   set('publisher', draft.publisher);
