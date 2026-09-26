@@ -1,0 +1,50 @@
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: #f6f3ec;
+  color: #1d1f1e;
+}
+
+header {
+  background: #1f4e46;
+  color: white;
+  padding: 12px 24px;
+}
+
+header h1 { margin: 0; font-size: 1.4rem; }
+
+main { padding: 24px; }
+
+/* The grid: as many 160px-wide columns as fit, stretched to fill the row */
+#grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 20px;
+}
+
+/* A coloured box standing in for the cover photo */
+.cover {
+  aspect-ratio: 2 / 3;            /* book shape: 2 wide, 3 tall */
+  background: #1f4e46;
+  color: white;
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  align-items: flex-end;           /* title at the bottom of the box */
+  font-weight: bold;
+}
+
+.title  { font-weight: bold; margin-top: 8px; }
+.author { color: #676b68; font-size: 0.9rem; }
+.meta   { font-size: 0.8rem; color: #676b68; margin-top: 4px; }
+
+/* Small label shown only on translated books */
+.badge {
+  display: inline-block;
+  background: #c98a12;
+  color: white;
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-top: 4px;
+}
