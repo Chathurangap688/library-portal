@@ -83,7 +83,15 @@
         <label>Title in English letters <small>(Singlish)</small><input name="titleSinglish" placeholder="Madol Doowa"></label>
         <label>Author in English letters<input name="authorSinglish" placeholder="Martin Wickramasinghe"></label>
       </div>
-      <label>Categories <small>(comma separated)</small><input name="categories" placeholder="Fiction, History"></label>
+      <!-- Lesson 7d: pick categories by tapping chips (list comes from the server) -->
+      <div class="field">
+        <span class="field-label">Categories <small>(tap to select)</small></span>
+        <div id="categoryChips" class="chips"></div>
+        <div class="row">
+          <input id="customCategory" placeholder="Other category…">
+          <button type="button" id="addCategory">Add</button>
+        </div>
+      </div>
       <div class="two">
         <label>Language
           <select name="language">
@@ -92,6 +100,24 @@
         </label>
         <label class="check"><input type="checkbox" name="isTranslation"> Translation</label>
       </div>
+
+      <!-- Lesson 7d: only shown when "Translation" is ticked -->
+      <div id="translationFields" hidden>
+        <label>Translator<input name="translator" placeholder="Name of the translator"></label>
+        <div class="two">
+          <label>Original title<input name="originalTitle"></label>
+          <label>Original author<input name="originalAuthor"></label>
+        </div>
+      </div>
+
+      <!-- Lesson 7d: web lookup -->
+      <div class="web-box">
+        <button type="button" id="webButton">🔎 Find more on the web</button>
+        <span id="webStatus"></span>
+      </div>
+      <label>Description<textarea name="description" rows="3"></textarea></label>
+      <label>What readers say<textarea name="reviewSummary" rows="2"></textarea></label>
+      <input type="hidden" name="webSources">
       <div class="two">
         <label>ISBN<input name="isbn" inputmode="numeric"></label>
         <label>Year<input name="year" inputmode="numeric"></label>

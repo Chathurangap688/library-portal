@@ -1,6 +1,7 @@
 // Lesson 3: the real books now come from the Google Sheet.
 // `let` (not const) because we replace the list after it downloads.
 let books = [];
+let allCategories = [];   // Lesson 7d: the common category list, sent by the server
 
 // Sample data, used only when API_URL in config.js is empty (e.g. testing offline).
 const sampleBooks = [
@@ -170,14 +171,15 @@ document.getElementById('onlyTranslations').addEventListener('change', applyFilt
 
 // All the text we search in, for one book (lower case)
 function searchHaystack(book) {
-  return [book.title, book.author, book.titleSinglish, book.authorSinglish,
+  return [book.title, book.author, book.titleSinglish, book.authorSinglish, book.translator,
     (book.categories || []).join(' ')].join(' ').toLowerCase();
 }
 
 // The loose key of a book — calculated once, then remembered on the book object
 function searchKeyOf(book) {
   if (book._key === undefined) {
-    book._key = singlishKey(searchHaystack(book) + ' ' + sinhalaToLatin(book.title) + ' ' + sinhalaToLatin(book.author));
+    book._key = singlishKey(searchHaystack(book) + ' ' + sinhalaToLatin(book.title) + ' ' + sinhalaToLatin(book.author) +
+      ' ' + sinhalaToLatin(book.translator));
   }
   return book._key;
 }
@@ -263,6 +265,7 @@ async function loadBooks() {
     }
     if (!data.ok) throw new Error(data.error || 'Server error');
     books = data.books;                           // 3. store the list
+    allCategories = data.categories || [];
     applyFilters();                               // 4. draw it
   } catch (err) {
     // Network down, wrong URL, script error… show it instead of a blank page
@@ -410,6 +413,10 @@ function openBook(bookId) {
     <p class="author">by ${escapeHtml(book.author)}</p>
     <p class="meta">${escapeHtml(book.language)} · ${escapeHtml(book.categories.join(', '))}
       ${book.isTranslation ? ' · Translation' : ''}</p>
+    ${translationInfo(book)}
+    ${book.description ? `<p class="desc">${escapeHtml(book.description)}</p>` : ''}
+    ${book.reviewSummary ? `<p class="desc"><b>What readers say:</b> ${escapeHtml(book.reviewSummary)}</p>` : ''}
+    ${sourcesHtml(book.webSources)}
     <p class="stars">${book.ratingCount ? `${starText(book.ratingAvg)} ${book.ratingAvg} from ${book.ratingCount} rating(s)` : 'No ratings yet'}</p>
     ${userSection}
     <h3>Reviews</h3>
@@ -500,16 +507,20 @@ function openEditor(bookId) {
   if (book) {
     // form.elements.title = the <input name="title">
     ['id', 'title', 'author', 'titleSinglish', 'authorSinglish', 'language', 'isbn', 'publisher', 'year', 'shelf',
-     'purchasedFrom', 'price', 'notes', 'coverUrl'].forEach(name => {
+     'purchasedFrom', 'price', 'notes', 'coverUrl',
+     'translator', 'originalTitle', 'originalAuthor', 'description', 'reviewSummary', 'webSources'].forEach(name => {
       form.elements[name].value = book[name] || '';
     });
-    form.elements.categories.value = (book.categories || []).join(', ');
+    renderCategoryChips(book.categories || []);
     form.elements.isTranslation.checked = book.isTranslation === true;
     form.elements.purchaseDate.value = String(book.purchaseDate || '').slice(0, 10);   // date input wants yyyy-mm-dd
   } else {
     form.elements.id.value = '';
     form.elements.coverUrl.value = '';
+    renderCategoryChips([]);
   }
+  showTranslationFields();
+  document.getElementById('webStatus').textContent = '';
   resetPhoto(book ? book.coverUrl : '');     // Lesson 7
   editDialog.showModal();
   form.elements.title.focus();
@@ -526,7 +537,13 @@ form.addEventListener('submit', async event => {
     author: f.author.value,
     titleSinglish: f.titleSinglish.value,
     authorSinglish: f.authorSinglish.value,
-    categories: f.categories.value.split(',').map(c => c.trim()).filter(c => c),
+    categories: selectedCategories(),
+    translator: f.translator.value,
+    originalTitle: f.originalTitle.value,
+    originalAuthor: f.originalAuthor.value,
+    description: f.description.value,
+    reviewSummary: f.reviewSummary.value,
+    webSources: f.webSources.value,
     language: f.language.value,
     isTranslation: f.isTranslation.checked,
     isbn: f.isbn.value, publisher: f.publisher.value, year: f.year.value, shelf: f.shelf.value,
@@ -743,7 +760,9 @@ function fillFormFromAi(draft) {
   set('author', draft.author);
   set('titleSinglish', draft.titleSinglish);
   set('authorSinglish', draft.authorSinglish);
-  set('categories', (draft.categories || []).join(', '));
+  if ((draft.categories || []).length) renderCategoryChips(draft.categories);
+  set('translator', draft.translator);
+  set('originalTitle', draft.originalTitle);
   set('isbn', draft.isbn);
   set('publisher', draft.publisher);
   set('year', draft.year);
@@ -755,7 +774,111 @@ function fillFormFromAi(draft) {
     set('language', draft.language);
   }
   f.isTranslation.checked = draft.isTranslation === true;
+  showTranslationFields();
 }
+
+// ------------------------------------------------------------------
+// Lesson 7d: translation fields, category chips, web lookup
+// ------------------------------------------------------------------
+
+// "Translated by X · Original: Y by Z" line for the book popup
+function translationInfo(book) {
+  if (!book.isTranslation) return '';
+  const parts = [];
+  if (book.translator) parts.push('Translated by <b>' + escapeHtml(book.translator) + '</b>');
+  if (book.originalTitle || book.originalAuthor) {
+    parts.push('Original: <i>' + escapeHtml(book.originalTitle || '?') + '</i>' +
+      (book.originalAuthor ? ' by ' + escapeHtml(book.originalAuthor) : ''));
+  }
+  return parts.length ? `<p class="meta">${parts.join(' · ')}</p>` : '';
+}
+
+// webSources is saved as JSON text: [{title, url}, ...]
+function sourcesHtml(webSources) {
+  let list = [];
+  try { list = JSON.parse(webSources || '[]'); } catch (e) { return ''; }
+  // Only allow http(s) links — a "javascript:" URL in an href would run code when clicked
+  list = list.filter(s => /^https?:\/\//.test(s.url));
+  if (!list.length) return '';
+  return `<p class="sources"><small>Sources: ${list.map(s =>
+    `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.title)}</a>`).join(' · ')}</small></p>`;
+}
+
+function showTranslationFields() {
+  document.getElementById('translationFields').hidden = !form.elements.isTranslation.checked;
+}
+form.elements.isTranslation.addEventListener('change', showTranslationFields);
+
+// Draw one checkbox "chip" per category; tick the ones in `selected`.
+// A book's own category that is not in the common list is added too (so it is not lost).
+function renderCategoryChips(selected) {
+  const names = [...allCategories];
+  selected.forEach(c => { if (!names.includes(c)) names.push(c); });
+  document.getElementById('categoryChips').innerHTML = names.map(c => `
+    <label class="chip-option">
+      <input type="checkbox" value="${escapeHtml(c)}" ${selected.includes(c) ? 'checked' : ''}>
+      <span>${escapeHtml(c)}</span>
+    </label>`).join('');
+}
+
+function selectedCategories() {
+  return [...document.querySelectorAll('#categoryChips input:checked')].map(i => i.value);
+}
+
+document.getElementById('addCategory').addEventListener('click', () => {
+  const input = document.getElementById('customCategory');
+  const name = input.value.trim();
+  if (!name) return;
+  renderCategoryChips([...selectedCategories(), name]);   // redraw with the new one ticked
+  input.value = '';
+});
+
+// Ask the server to search the web for this book, then fill EMPTY fields only
+document.getElementById('webButton').addEventListener('click', async () => {
+  const f = form.elements;
+  const status = document.getElementById('webStatus');
+  const button = document.getElementById('webButton');
+  if (!f.title.value.trim()) { status.textContent = 'Enter the title first'; return; }
+
+  button.disabled = true;
+  status.textContent = 'Searching the web… (10–30 seconds)';
+  try {
+    const known = {};
+    ['title', 'author', 'titleSinglish', 'authorSinglish', 'translator', 'language', 'isbn', 'publisher']
+      .forEach(k => { known[k] = f[k].value; });
+    const { info } = await callApi('webLookup', { book: known });   // "destructuring": take data.info
+
+    if (!info.found) {
+      status.textContent = 'Could not find this book on the web with confidence.';
+      return;
+    }
+    // Fill only what the admin has not typed yet — never overwrite their work
+    const fillEmpty = (name, value) => {
+      if (value && !f[name].value.trim()) {
+        f[name].value = value;
+        f[name].classList.remove('ai-filled'); void f[name].offsetWidth; f[name].classList.add('ai-filled');
+      }
+    };
+    fillEmpty('description', info.description);
+    fillEmpty('reviewSummary', info.reviewSummary);
+    fillEmpty('publisher', info.publisher);
+    fillEmpty('year', String(info.year || ''));
+    if (info.translator || info.originalTitle) {
+      f.isTranslation.checked = true;
+      showTranslationFields();
+    }
+    fillEmpty('translator', info.translator);
+    fillEmpty('originalTitle', info.originalTitle);
+    fillEmpty('originalAuthor', info.originalAuthor);
+    if (info.categories.length && !selectedCategories().length) renderCategoryChips(info.categories);
+    f.webSources.value = JSON.stringify(info.sources || []);
+    status.textContent = `Found! ${info.sources.length} source(s). Please check before saving.`;
+  } catch (err) {
+    status.textContent = err.message;
+  } finally {
+    button.disabled = false;
+  }
+});
 
 // First load when the page opens
 loadBooks();

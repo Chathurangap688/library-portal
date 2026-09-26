@@ -11,7 +11,7 @@ function doGet(e) {
   const books = readBooks().map(hidePrivateFields);   // Lesson 6: public = no purchase info
   addRatingsToBooks(books);            // Lesson 5: average stars + public reviews
   return ContentService
-    .createTextOutput(JSON.stringify({ ok: true, books: books }))
+    .createTextOutput(JSON.stringify({ ok: true, books: books, categories: BOOK_CATEGORIES }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -96,11 +96,15 @@ function doPost(e) {
       requireAdmin(user);
       const books = readBooks();                 // ALL fields, including purchase info
       addRatingsToBooks(books);
-      return jsonResponse({ ok: true, books: books });
+      return jsonResponse({ ok: true, books: books, categories: BOOK_CATEGORIES });
     }
     if (request.action === 'saveBook') {
       requireAdmin(user);
       return jsonResponse({ ok: true, book: saveBook(user, request.book, request.imageBase64) });
+    }
+    if (request.action === 'webLookup') {             // Lesson 7d
+      requireAdmin(user);
+      return jsonResponse({ ok: true, info: webLookup(request.book) });
     }
     if (request.action === 'analyzeCover') {          // Lesson 7
       requireAdmin(user);
@@ -319,7 +323,9 @@ const BOOK_FIELDS = ['id', 'title', 'author', 'categories', 'isTranslation', 'la
   'purchasedFrom', 'purchaseDate', 'price', 'notes',
   'addedBy', 'addedAt', 'updatedAt',
   'coverUrl', 'coverFileId',                         // Lesson 7
-  'titleSinglish', 'authorSinglish'];                 // Lesson 7c: for English-keyboard search
+  'titleSinglish', 'authorSinglish',                 // Lesson 7c: for English-keyboard search
+  'translator', 'originalTitle', 'originalAuthor',    // Lesson 7d: translations
+  'description', 'reviewSummary', 'webSources'];      // Lesson 7d: from the web
 
 // Only admins see these (removed from the public doGet answer)
 const PRIVATE_FIELDS = ['purchasedFrom', 'purchaseDate', 'price', 'notes', 'addedBy'];
@@ -362,6 +368,7 @@ function saveBook(user, input, imageBase64) {
   const book = Object.assign({}, existing);
   // Copy ONLY known, editable fields from the browser (never trust extra keys)
   ['title', 'author', 'titleSinglish', 'authorSinglish', 'language', 'isbn', 'publisher', 'year', 'shelf',
+   'translator', 'originalTitle', 'originalAuthor', 'description', 'reviewSummary', 'webSources',
    'purchasedFrom', 'purchaseDate', 'price', 'notes', 'coverUrl'].forEach(f => {
     book[f] = String(input[f] || '').trim().slice(0, 2000);
   });
@@ -424,7 +431,9 @@ function analyzeCover(imageBase64, mimeType) {
     'If the title is already in English letters, leave titleSinglish and authorSinglish empty.',
     'language = the language the book is written in (e.g. English, Sinhala, Tamil).',
     'isTranslation = true only if the cover says it is translated (e.g. "translated by", "පරිවර්තනය").',
-    'Give 1 to 3 short categories such as Fiction, History, Programming, Self-help, Biography.',
+    'translator = the translator\'s name if printed (often after "පරිවර්තනය" or "translated by"), else empty.',
+    'If it is a translation, author = the ORIGINAL author when printed, and originalTitle = the original title if printed.',
+    'categories = 1 to 3 items chosen ONLY from this list: ' + BOOK_CATEGORIES.join(', ') + '.',
     'Only give an ISBN if you can SEE it in the photo. Never guess an ISBN.',
     'Use an empty string for anything you cannot read.',
     'confidence = a number from 0 to 1: how sure you are about the title.',
@@ -440,6 +449,8 @@ function analyzeCover(imageBase64, mimeType) {
       author: { type: 'STRING' },
       titleSinglish: { type: 'STRING' },
       authorSinglish: { type: 'STRING' },
+      translator: { type: 'STRING' },
+      originalTitle: { type: 'STRING' },
       categories: { type: 'ARRAY', items: { type: 'STRING' } },
       language: { type: 'STRING' },
       isTranslation: { type: 'BOOLEAN' },
@@ -467,28 +478,38 @@ function analyzeCover(imageBase64, mimeType) {
   return draft;
 }
 
-/** Calls the Gemini REST API with a text prompt + one image, returns the parsed JSON answer. */
+/** Calls Gemini with a text prompt + (optional) image and a JSON schema. Returns the parsed JSON. */
 function callGemini(prompt, imageBase64, mimeType, schema) {
-  const props = PropertiesService.getScriptProperties();
-  const apiKey = props.getProperty('GEMINI_API_KEY');
-  if (!apiKey) throw new Error('GEMINI_API_KEY is not set in Script properties');
-  // Lesson 7b: a list of models to try. If the first is busy (503) or out of free quota (429),
-  // we try the next one. Each model has its own free quota.
-  const models = [props.getProperty('GEMINI_MODEL') || 'gemini-flash-latest', 'gemini-flash-lite-latest'];
-
+  const parts = [{ text: prompt }];
+  if (imageBase64) parts.push({ inline_data: { mime_type: mimeType, data: imageBase64 } });   // the photo itself
   const body = {
-    contents: [{
-      parts: [
-        { text: prompt },
-        { inline_data: { mime_type: mimeType, data: imageBase64 } }   // the photo itself
-      ]
-    }],
+    contents: [{ parts: parts }],
     generationConfig: {
       temperature: 0.1,                         // low = factual, not creative
       responseMimeType: 'application/json',
       responseSchema: schema
     }
   };
+  return JSON.parse(answerText(geminiRequest(body)));
+}
+
+/** Pulls the answer text out of Gemini's nested response: candidates[0].content.parts[].text */
+function answerText(answer) {
+  const parts = (answer.candidates && answer.candidates[0] && answer.candidates[0].content &&
+    answer.candidates[0].content.parts) || [];
+  const text = parts.filter(p => p.text && !p.thought).map(p => p.text).join('');
+  if (!text) throw new Error('The AI returned no answer. Try again.');
+  return text;
+}
+
+/** Sends ANY request body to Gemini, with retries + a backup model. Returns the full response object. */
+function geminiRequest(body) {
+  const props = PropertiesService.getScriptProperties();
+  const apiKey = props.getProperty('GEMINI_API_KEY');
+  if (!apiKey) throw new Error('GEMINI_API_KEY is not set in Script properties');
+  // Lesson 7b: a list of models to try. If the first is busy (503) or out of free quota (429),
+  // we try the next one. Each model has its own free quota.
+  const models = [props.getProperty('GEMINI_MODEL') || 'gemini-flash-latest', 'gemini-flash-lite-latest'];
 
   let res = null, code = 0;
   tryModels:
@@ -518,12 +539,7 @@ function callGemini(prompt, imageBase64, mimeType, schema) {
   if (code === 400 || code === 403) throw new Error('The AI rejected the request (check GEMINI_API_KEY).');
   if (code !== 200) throw new Error('AI error ' + code + '. See Executions log in Apps Script.');
 
-  // The answer is nested: candidates[0].content.parts[].text  (the text IS our JSON)
-  const answer = JSON.parse(res.getContentText());
-  const parts = (answer.candidates && answer.candidates[0].content && answer.candidates[0].content.parts) || [];
-  const text = parts.filter(p => p.text && !p.thought).map(p => p.text).join('');
-  if (!text) throw new Error('The AI returned no answer. Try a clearer photo.');
-  return JSON.parse(text);
+  return JSON.parse(res.getContentText());
 }
 
 /** Looks a book up on Google Books by ISBN, or by title + author. Returns null if not found. */
@@ -575,4 +591,68 @@ function testGemini() {
     muteHttpExceptions: true
   });
   Logger.log(res.getResponseCode() + ' ' + res.getContentText().slice(0, 500));
+}
+
+
+// =====================================================================
+// Lesson 7d: categories list + web lookup (Gemini with Google Search)
+// =====================================================================
+
+// ONE list, used by the AI prompts AND sent to the browser for the category picker.
+const BOOK_CATEGORIES = [
+  'Novel', 'Short Stories', 'Poetry', 'Classic', 'Children', 'Young Adult',
+  'Mystery & Thriller', 'Romance', 'Science Fiction & Fantasy', 'Historical Fiction',
+  'Biography & Memoir', 'History', 'Religion & Philosophy', 'Buddhism', 'Politics & Society',
+  'Psychology', 'Self-help', 'Health & Wellness', 'Business & Management', 'Economics & Finance',
+  'Science', 'Technology', 'Programming', 'Software Engineering', 'Security', 'Data & AI',
+  'Education & Reference', 'Language & Linguistics', 'Travel', 'Art & Photography', 'Cooking',
+  'Comics'
+];
+
+/**
+ * Ask Gemini to SEARCH THE WEB (Google Search grounding) for the book and summarise.
+ * input = what we already know: { title, author, titleSinglish, authorSinglish, translator, language, isbn }
+ */
+function webLookup(input) {
+  if (!input || !input.title) throw new Error('Enter at least a title first');
+  const known = ['title', 'author', 'titleSinglish', 'authorSinglish', 'translator', 'language', 'isbn', 'publisher']
+    .filter(k => input[k]).map(k => k + ': ' + String(input[k]).slice(0, 200)).join('\n');
+
+  const prompt = [
+    'Search the web for this book and tell me about it.',
+    known,
+    '',
+    'Answer with ONLY a JSON object (no other text) with these keys:',
+    '  found: true only if you are confident you found THIS book (same title and author)',
+    '  description: 2-4 neutral sentences in English about what the book is about',
+    '  reviewSummary: 1-2 sentences on what readers or critics say about it (empty if nothing found)',
+    '  originalTitle, originalAuthor, originalLanguage: if it is a translation',
+    '  translator, publisher, year, pageCount',
+    '  categories: 1-3 items ONLY from: ' + BOOK_CATEGORIES.join(', '),
+    'Use empty strings for anything you did not find. Never invent facts.'
+  ].join('\n');
+
+  const body = {
+    contents: [{ parts: [{ text: prompt }] }],
+    tools: [{ google_search: {} }],          // ← lets Gemini run Google searches before answering
+    generationConfig: { temperature: 0.2 }
+    // Note: no responseSchema here — structured output and the search tool do not mix on every model,
+    // so we ask for JSON in words and cut it out of the text below.
+  };
+  const answer = geminiRequest(body);
+  const text = answerText(answer);
+
+  // Take the part between the first "{" and the last "}" (models sometimes add ```json … ```)
+  const jsonText = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1);
+  let info;
+  try { info = JSON.parse(jsonText); } catch (e) { throw new Error('Could not understand the web answer. Try again.'); }
+
+  // Which web pages did it use? (grounding metadata) → keep up to 5 as "sources"
+  const chunks = (answer.candidates[0].groundingMetadata || {}).groundingChunks || [];
+  info.sources = chunks.filter(c => c.web && c.web.uri).slice(0, 5)
+    .map(c => ({ title: c.web.title || c.web.uri, url: c.web.uri }));
+
+  // Keep only categories from our list
+  info.categories = (info.categories || []).filter(c => BOOK_CATEGORIES.includes(c));
+  return info;
 }
