@@ -1,0 +1,7 @@
+id,title,author,categories,isTranslation,language
+book1,Book 1,Author 1,"Programming, Software Engineering",FALSE,English
+book2,Book 2,Author 2,Fiction,TRUE,Sinhala
+book3,Book 3,Author 3,"Security, Identity & Access",FALSE,English
+book4,Book 4,Author 4,"Biography, History",FALSE,Sinhala
+book5,Book 5,Author 5,Self-help,TRUE,Tamil
+book6,Book 6,Author 6,Science,FALSE,English

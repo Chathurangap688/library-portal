@@ -1,5 +1,9 @@
-// Sample data for Lesson 1. Later this will come from the Google Sheet.
-const books = [
+// Lesson 3: the real books now come from the Google Sheet.
+// `let` (not const) because we replace the list after it downloads.
+let books = [];
+
+// Sample data, used only when API_URL in config.js is empty (e.g. testing offline).
+const sampleBooks = [
   {
     id: 'book1',
     title: 'Book 1',
@@ -129,5 +133,33 @@ document.getElementById('search').addEventListener('input', applyFilters);   // 
 document.getElementById('language').addEventListener('change', applyFilters);
 document.getElementById('onlyTranslations').addEventListener('change', applyFilters);
 
-// First draw when the page loads
-applyFilters();
+// ------------------------------------------------------------------
+// Lesson 3: download the books from the Google Sheet (via Apps Script).
+// `async` lets us use `await` = "wait for this to finish, then continue".
+// ------------------------------------------------------------------
+async function loadBooks() {
+  const count = document.getElementById('count');
+
+  if (!API_URL) {                       // no backend yet → use sample data
+    books = sampleBooks;
+    count.textContent = 'Using sample data (set API_URL in config.js)';
+    applyFilters();
+    return;
+  }
+
+  count.textContent = 'Loading books…';
+  try {
+    const response = await fetch(API_URL);        // 1. ask the server
+    const data = await response.json();           // 2. read the answer as JSON
+    if (!data.ok) throw new Error(data.error || 'Server error');
+    books = data.books;                           // 3. store the list
+    applyFilters();                               // 4. draw it
+  } catch (err) {
+    // Network down, wrong URL, script error… show it instead of a blank page
+    count.textContent = 'Could not load books: ' + err.message;
+    console.error(err);
+  }
+}
+
+// First load when the page opens
+loadBooks();
