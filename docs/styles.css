@@ -154,3 +154,22 @@ dialog h2 { margin-top: 0; }
 .admin-box table { font-size: 0.9rem; margin-bottom: 10px; }
 .admin-box th { text-align: left; color: #676b68; font-weight: normal; padding-right: 12px; }
 .admin-box .danger { color: #a3312a; }
+
+/* ---------- Lesson 7 ---------- */
+.cover.has-image { padding: 0; overflow: hidden; background: #ddd6c8; }
+.cover.has-image img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cover.has-image .status { z-index: 1; }
+
+.photo-box { display: grid; grid-template-columns: 120px 1fr; gap: 12px; align-items: center;
+  background: #f6f3ec; border-radius: 10px; padding: 10px; }
+.photo-pick { aspect-ratio: 2 / 3; border: 2px dashed #c9bfa9; border-radius: 8px; cursor: pointer;
+  display: flex !important; align-items: center; justify-content: center; text-align: center;
+  overflow: hidden; font-size: 0.8rem; padding: 6px; background: white; }
+.photo-pick img { width: 100%; height: 100%; object-fit: cover; }
+.photo-pick img[hidden], #photoHint[hidden] { display: none; }
+#analyzeButton { background: #1f4e46; color: white; border: none; border-radius: 8px;
+  padding: 10px 14px; cursor: pointer; font-weight: bold; }
+#analyzeButton:disabled { opacity: .5; cursor: not-allowed; }
+#aiStatus { font-size: 0.85rem; color: #676b68; margin: 8px 0 0; }
+.ai-filled { animation: aiFlash 1.5s ease; }
+@keyframes aiFlash { 0% { background: #fff1c7; } 100% { background: white; } }

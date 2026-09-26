@@ -100,7 +100,11 @@ function doPost(e) {
     }
     if (request.action === 'saveBook') {
       requireAdmin(user);
-      return jsonResponse({ ok: true, book: saveBook(user, request.book) });
+      return jsonResponse({ ok: true, book: saveBook(user, request.book, request.imageBase64) });
+    }
+    if (request.action === 'analyzeCover') {          // Lesson 7
+      requireAdmin(user);
+      return jsonResponse({ ok: true, draft: analyzeCover(request.imageBase64, request.mimeType) });
     }
     if (request.action === 'deleteBook') {
       requireAdmin(user);
@@ -313,7 +317,8 @@ function addRatingsToBooks(books) {
 const BOOK_FIELDS = ['id', 'title', 'author', 'categories', 'isTranslation', 'language',
   'isbn', 'publisher', 'year', 'shelf',
   'purchasedFrom', 'purchaseDate', 'price', 'notes',
-  'addedBy', 'addedAt', 'updatedAt'];
+  'addedBy', 'addedAt', 'updatedAt',
+  'coverUrl', 'coverFileId'];                        // Lesson 7
 
 // Only admins see these (removed from the public doGet answer)
 const PRIVATE_FIELDS = ['purchasedFrom', 'purchaseDate', 'price', 'notes', 'addedBy'];
@@ -339,7 +344,7 @@ function ensureBookColumns(sheet) {
   return headers.concat(missing);
 }
 
-function saveBook(user, input) {
+function saveBook(user, input, imageBase64) {
   if (!input) throw new Error('No book data');
   const title = String(input.title || '').trim();
   if (!title) throw new Error('Title is required');
@@ -356,7 +361,7 @@ function saveBook(user, input) {
   const book = Object.assign({}, existing);
   // Copy ONLY known, editable fields from the browser (never trust extra keys)
   ['title', 'author', 'language', 'isbn', 'publisher', 'year', 'shelf',
-   'purchasedFrom', 'purchaseDate', 'price', 'notes'].forEach(f => {
+   'purchasedFrom', 'purchaseDate', 'price', 'notes', 'coverUrl'].forEach(f => {
     book[f] = String(input[f] || '').trim().slice(0, 2000);
   });
   book.title = title;
@@ -372,6 +377,13 @@ function saveBook(user, input) {
   }
   book.updatedAt = now;
 
+  // Lesson 7: a photo was sent → store it in Drive and use it as the cover
+  if (imageBase64) {
+    const saved = saveCoverToDrive(book.id, imageBase64);
+    book.coverFileId = saved.fileId;
+    book.coverUrl = saved.url;
+  }
+
   // Put values in the same order as the sheet columns
   const values = headers.map(h => book[h] === undefined ? '' : book[h]);
   upsertRow(sheet, r => String(r.id) === String(book.id), values);
@@ -386,4 +398,157 @@ function deleteBook(bookId) {
   deleteRowsWhere(getSheet('Reading', ['email', 'bookId', 'status', 'updatedAt']), same);
   deleteRowsWhere(getSheet('Ratings', ['bookId', 'email', 'userName', 'rating', 'review', 'updatedAt']), same);
   return { bookId: bookId };
+}
+
+
+// =====================================================================
+// Lesson 7: photo of a cover → Gemini reads it → form is filled in
+//
+// Script properties:
+//   GEMINI_API_KEY = key from https://aistudio.google.com/apikey
+//   GEMINI_MODEL   = (optional) default "gemini-flash-latest"
+//   DRIVE_FOLDER_ID is created automatically on the first photo
+// =====================================================================
+
+function analyzeCover(imageBase64, mimeType) {
+  if (!imageBase64) throw new Error('No image received');
+
+  // 1. Tell the AI exactly what we want. Clear rules = fewer made-up answers.
+  const prompt = [
+    'This is a photo of a book cover from an office library in Sri Lanka.',
+    'Read the text on the cover exactly as printed.',
+    'language = the language the book is written in (e.g. English, Sinhala, Tamil).',
+    'isTranslation = true only if the cover says it is translated (e.g. "translated by", "පරිවර්තනය").',
+    'Give 1 to 3 short categories such as Fiction, History, Programming, Self-help, Biography.',
+    'Only give an ISBN if you can SEE it in the photo. Never guess an ISBN.',
+    'Use an empty string for anything you cannot read.',
+    'confidence = a number from 0 to 1: how sure you are about the title.',
+    'coverBox = where the book cover is in the photo, as [ymin, xmin, ymax, xmax]',
+    'scaled from 0 to 1000 (0,0 = top-left of the photo). Follow the cover\'s outer edges.'
+  ].join('\n');
+
+  // 2. A JSON schema forces Gemini to answer in exactly this shape
+  const schema = {
+    type: 'OBJECT',
+    properties: {
+      title: { type: 'STRING' },
+      author: { type: 'STRING' },
+      categories: { type: 'ARRAY', items: { type: 'STRING' } },
+      language: { type: 'STRING' },
+      isTranslation: { type: 'BOOLEAN' },
+      isbn: { type: 'STRING' },
+      publisher: { type: 'STRING' },
+      year: { type: 'STRING' },
+      confidence: { type: 'NUMBER' },
+      coverBox: { type: 'ARRAY', items: { type: 'NUMBER' } }      // for auto-crop in the browser
+    },
+    required: ['title', 'author', 'categories', 'language', 'isTranslation', 'confidence']
+  };
+
+  const draft = callGemini(prompt, imageBase64, mimeType || 'image/jpeg', schema);
+
+  // 3. Clean up the answer: keep only digits/X in the ISBN
+  draft.isbn = String(draft.isbn || '').replace(/[^0-9Xx]/g, '');
+  if (draft.isbn.length !== 10 && draft.isbn.length !== 13) draft.isbn = '';
+
+  // 4. Google Books (free, no key needed) can fill gaps + give a nice cover picture
+  const extra = googleBooksLookup(draft.isbn, draft.title, draft.author);
+  if (extra) {
+    ['isbn', 'publisher', 'year'].forEach(f => { if (!draft[f]) draft[f] = extra[f]; });
+    draft.coverUrl = extra.coverUrl;
+  }
+  return draft;
+}
+
+/** Calls the Gemini REST API with a text prompt + one image, returns the parsed JSON answer. */
+function callGemini(prompt, imageBase64, mimeType, schema) {
+  const props = PropertiesService.getScriptProperties();
+  const apiKey = props.getProperty('GEMINI_API_KEY');
+  if (!apiKey) throw new Error('GEMINI_API_KEY is not set in Script properties');
+  const model = props.getProperty('GEMINI_MODEL') || 'gemini-flash-latest';
+
+  const body = {
+    contents: [{
+      parts: [
+        { text: prompt },
+        { inline_data: { mime_type: mimeType, data: imageBase64 } }   // the photo itself
+      ]
+    }],
+    generationConfig: {
+      temperature: 0.1,                         // low = factual, not creative
+      responseMimeType: 'application/json',
+      responseSchema: schema
+    }
+  };
+
+  const res = UrlFetchApp.fetch(
+    'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent', {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'x-goog-api-key': apiKey },    // the key goes in a header, never in the browser
+      payload: JSON.stringify(body),
+      muteHttpExceptions: true                  // let US handle errors instead of crashing
+    });
+
+  const code = res.getResponseCode();
+  if (code === 429) throw new Error('AI free limit reached. Wait a minute and try again, or type the details.');
+  if (code !== 200) throw new Error('Gemini error ' + code + ': ' + res.getContentText().slice(0, 200));
+
+  // The answer is nested: candidates[0].content.parts[].text  (the text IS our JSON)
+  const answer = JSON.parse(res.getContentText());
+  const parts = (answer.candidates && answer.candidates[0].content && answer.candidates[0].content.parts) || [];
+  const text = parts.filter(p => p.text && !p.thought).map(p => p.text).join('');
+  if (!text) throw new Error('The AI returned no answer. Try a clearer photo.');
+  return JSON.parse(text);
+}
+
+/** Looks a book up on Google Books by ISBN, or by title + author. Returns null if not found. */
+function googleBooksLookup(isbn, title, author) {
+  let q = isbn ? 'isbn:' + isbn : (title ? 'intitle:' + title + (author ? ' inauthor:' + author : '') : '');
+  if (!q) return null;
+  try {
+    const res = UrlFetchApp.fetch('https://www.googleapis.com/books/v1/volumes?maxResults=1&q=' +
+      encodeURIComponent(q), { muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return null;
+    const item = (JSON.parse(res.getContentText()).items || [])[0];
+    if (!item) return null;
+    const v = item.volumeInfo;
+    const ids = v.industryIdentifiers || [];
+    const isbn13 = ids.find(i => i.type === 'ISBN_13') || ids.find(i => i.type === 'ISBN_10') || {};
+    return {
+      isbn: isbn13.identifier || '',
+      publisher: v.publisher || '',
+      year: String(v.publishedDate || '').slice(0, 4),
+      coverUrl: ((v.imageLinks && v.imageLinks.thumbnail) || '').replace('http://', 'https://')
+    };
+  } catch (err) {
+    return null;          // Google Books is a "nice to have": never fail the whole request
+  }
+}
+
+/** Saves the photo as a JPEG in a Drive folder, shared "anyone with the link can view". */
+function saveCoverToDrive(bookId, imageBase64) {
+  const props = PropertiesService.getScriptProperties();
+  let folderId = props.getProperty('DRIVE_FOLDER_ID');
+  if (!folderId) {
+    folderId = DriveApp.createFolder('Library Portal - Covers').getId();
+    props.setProperty('DRIVE_FOLDER_ID', folderId);
+  }
+  // base64 text → bytes → a "blob" (file content) → a file in Drive
+  const blob = Utilities.newBlob(Utilities.base64Decode(imageBase64), 'image/jpeg', bookId + '.jpg');
+  const file = DriveApp.getFolderById(folderId).createFile(blob);
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  return { fileId: file.getId(), url: 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w600' };
+}
+
+/** Run this once from the editor to check your Gemini key works (no image). */
+function testGemini() {
+  const apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  const model = PropertiesService.getScriptProperties().getProperty('GEMINI_MODEL') || 'gemini-flash-latest';
+  const res = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent', {
+    method: 'post', contentType: 'application/json', headers: { 'x-goog-api-key': apiKey },
+    payload: JSON.stringify({ contents: [{ parts: [{ text: 'Say hello in Sinhala' }] }] }),
+    muteHttpExceptions: true
+  });
+  Logger.log(res.getResponseCode() + ' ' + res.getContentText().slice(0, 500));
 }

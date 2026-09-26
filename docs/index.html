@@ -62,6 +62,20 @@
     <form id="bookForm">
       <h2 id="formTitle">Add a book</h2>
       <input type="hidden" name="id">
+      <input type="hidden" name="coverUrl">
+
+      <!-- Lesson 7: photo → AI. capture="environment" opens the BACK camera on phones -->
+      <div class="photo-box">
+        <label class="photo-pick">
+          <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
+          <img id="photoPreview" alt="" hidden>
+          <span id="photoHint">📷 Take or choose a cover photo</span>
+        </label>
+        <div class="photo-actions">
+          <button type="button" id="analyzeButton" disabled>✨ Read cover with AI</button>
+          <p id="aiStatus"></p>
+        </div>
+      </div>
 
       <label>Title *<input name="title" required></label>
       <label>Author<input name="author"></label>

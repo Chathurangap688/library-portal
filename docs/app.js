@@ -85,7 +85,7 @@ function bookCard(book) {
   // data-id remembers WHICH book this card is, for the click handler.
   return `
     <div class="book" data-id="${escapeHtml(book.id)}">
-      <div class="cover">${statusLabel}${escapeHtml(book.title)}</div>
+      ${coverHtml(book, statusLabel)}
       <div class="title">${escapeHtml(book.title)}</div>
       <div class="author">${escapeHtml(book.author)}</div>
       <div class="meta">${escapeHtml(book.language)} · ${escapeHtml(book.categories.join(', '))}</div>
@@ -93,6 +93,15 @@ function bookCard(book) {
       ${badge}
     </div>
   `;
+}
+
+// Lesson 7: a real picture if we have one, otherwise the coloured box with the title
+function coverHtml(book, label) {
+  if (book.coverUrl) {
+    return `<div class="cover has-image">${label}<img src="${escapeHtml(book.coverUrl)}" alt="${escapeHtml(book.title)}" loading="lazy"
+      referrerpolicy="no-referrer" onerror="this.parentNode.classList.remove('has-image'); this.replaceWith(this.alt)"></div>`;
+  }
+  return `<div class="cover">${label}${escapeHtml(book.title)}</div>`;
 }
 
 // ★★★☆☆ for a number like 3.4 (rounded to the nearest star)
@@ -410,7 +419,7 @@ function openEditor(bookId) {
   if (book) {
     // form.elements.title = the <input name="title">
     ['id', 'title', 'author', 'language', 'isbn', 'publisher', 'year', 'shelf',
-     'purchasedFrom', 'price', 'notes'].forEach(name => {
+     'purchasedFrom', 'price', 'notes', 'coverUrl'].forEach(name => {
       form.elements[name].value = book[name] || '';
     });
     form.elements.categories.value = (book.categories || []).join(', ');
@@ -418,7 +427,9 @@ function openEditor(bookId) {
     form.elements.purchaseDate.value = String(book.purchaseDate || '').slice(0, 10);   // date input wants yyyy-mm-dd
   } else {
     form.elements.id.value = '';
+    form.elements.coverUrl.value = '';
   }
+  resetPhoto(book ? book.coverUrl : '');     // Lesson 7
   editDialog.showModal();
   form.elements.title.focus();
 }
@@ -437,14 +448,16 @@ form.addEventListener('submit', async event => {
     isTranslation: f.isTranslation.checked,
     isbn: f.isbn.value, publisher: f.publisher.value, year: f.year.value, shelf: f.shelf.value,
     purchasedFrom: f.purchasedFrom.value, purchaseDate: f.purchaseDate.value,
-    price: f.price.value, notes: f.notes.value
+    price: f.price.value, notes: f.notes.value,
+    coverUrl: f.coverUrl.value
   };
 
   const saveButton = document.getElementById('saveBook');
   saveButton.disabled = true;               // prevent double-clicks = duplicate books
   saveButton.textContent = 'Saving…';
   try {
-    const data = await callApi('saveBook', { book: book });
+    // Lesson 7: send the photo too (if one was taken) — the server stores it in Drive
+    const data = await callApi('saveBook', { book: book, imageBase64: cleanCover ? cleanCover.base64 : null });
     editDialog.close();
     await loadBooks();
     openBook(data.book.id);                 // show the saved book
@@ -470,6 +483,194 @@ async function deleteBookConfirmed(bookId) {
 
 document.getElementById('addBookButton').addEventListener('click', () => openEditor(null));
 document.getElementById('cancelEdit').addEventListener('click', () => editDialog.close());
+
+// ------------------------------------------------------------------
+// Lesson 7: take a photo → shrink it → send to the server → AI fills the form
+// ------------------------------------------------------------------
+let photo = null;     // { base64, mimeType } small copy sent to the AI
+let originalImage = null;   // the full photo (kept in memory) — we crop from this, not the small copy
+let cleanCover = null;      // { base64 } the cropped + resized + polished cover → saved to Drive
+
+function resetPhoto(existingCoverUrl) {
+  photo = null;
+  originalImage = null;
+  cleanCover = null;
+  document.getElementById('photoInput').value = '';
+  const preview = document.getElementById('photoPreview');
+  preview.hidden = !existingCoverUrl;
+  preview.src = existingCoverUrl || '';
+  document.getElementById('photoHint').hidden = !!existingCoverUrl;
+  document.getElementById('analyzeButton').disabled = true;
+  document.getElementById('aiStatus').textContent = '';
+}
+
+// Phone photos are 3–10 MB. We draw them onto a small <canvas> and export a
+// ~150 KB JPEG: faster upload, fits Apps Script limits, and enough for the AI to read.
+function shrinkImage(file, maxSize) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);   // "data:image/jpeg;base64,/9j/4AAQ..."
+      URL.revokeObjectURL(img.src);
+      resolve({ dataUrl: dataUrl, base64: dataUrl.split(',')[1], mimeType: 'image/jpeg' });
+    };
+    img.onerror = () => reject(new Error('Could not read that image'));
+    img.src = URL.createObjectURL(file);                       // a temporary local URL for the file
+  });
+}
+
+document.getElementById('photoInput').addEventListener('change', async event => {
+  const file = event.target.files[0];
+  if (!file) return;
+  try {
+    originalImage = await loadImage(file);
+    const small = await shrinkImage(file, 1024);
+    photo = { base64: small.base64, mimeType: small.mimeType };
+    cleanCover = polishCover(originalImage, null);    // no AI yet → resize + polish the whole photo
+    const preview = document.getElementById('photoPreview');
+    preview.src = small.dataUrl;
+    preview.hidden = false;
+    document.getElementById('photoHint').hidden = true;
+    document.getElementById('analyzeButton').disabled = false;
+    document.getElementById('aiStatus').textContent =
+      `Photo ready (${Math.round(small.base64.length * 0.75 / 1024)} KB)`;
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+// Load a File into an <img> element (full size) and wait until it is ready
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Could not read that image'));
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+/**
+ * Crop → resize → polish. Returns { base64 } of a JPEG ready for Drive.
+ *   box = [ymin, xmin, ymax, xmax] from the AI, 0–1000 scale (or null = whole photo)
+ */
+function polishCover(img, box) {
+  // ---- 1. CROP: turn the 0–1000 box into pixels, with a little margin ----
+  let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
+  if (Array.isArray(box) && box.length === 4) {
+    const [ymin, xmin, ymax, xmax] = box;
+    const valid = ymax > ymin && xmax > xmin && (ymax - ymin) > 150 && (xmax - xmin) > 150;  // ignore silly boxes
+    if (valid) {
+      const pad = 10;                                          // 1% margin so edges are not cut off
+      sx = Math.max(0, (xmin - pad) / 1000 * img.naturalWidth);
+      sy = Math.max(0, (ymin - pad) / 1000 * img.naturalHeight);
+      sw = Math.min(img.naturalWidth, (xmax + pad) / 1000 * img.naturalWidth) - sx;
+      sh = Math.min(img.naturalHeight, (ymax + pad) / 1000 * img.naturalHeight) - sy;
+    }
+  }
+
+  // ---- 2. RESIZE: longest side 900 px (sharp on screen, ~100 KB) ----
+  const scale = Math.min(1, 900 / Math.max(sw, sh));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(sw * scale);
+  canvas.height = Math.round(sh * scale);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  // drawImage(source, cut x, y, w, h,  paste x, y, w, h) = crop and resize in one step
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+
+  // ---- 3. POLISH: auto-levels + a little more colour ----
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  autoLevels(imageData.data);
+  ctx.putImageData(imageData, 0, 0);
+
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  return { base64: dataUrl.split(',')[1] };
+}
+
+/**
+ * pixels = [R,G,B,A, R,G,B,A, ...] (0–255).
+ * A photo taken in a dim office uses only part of 0–255 (e.g. 30–200).
+ * We look at the BRIGHTNESS of all pixels, find the darkest and brightest 0.5 %,
+ * and stretch that range to 0–255 → better contrast.
+ * The same stretch is used for R, G and B, so the cover's real colours are kept.
+ * Limits (max 40 at the dark end, min 215 at the bright end) stop it over-doing a
+ * cover that is really dark or really light.
+ */
+function autoLevels(pixels) {
+  const histogram = new Array(256).fill(0);        // how many pixels have each brightness
+  for (let i = 0; i < pixels.length; i += 4) {
+    const brightness = Math.round(0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2]);
+    histogram[brightness]++;
+  }
+  const cut = (pixels.length / 4) * 0.005;
+  let sum = 0, lo = 0, hi = 255;
+  while (lo < 255 && (sum += histogram[lo]) < cut) lo++;
+  sum = 0;
+  while (hi > 0 && (sum += histogram[hi]) < cut) hi--;
+  lo = Math.min(lo, 40);                            // gentle: never stretch more than this
+  hi = Math.max(hi, 215);
+
+  for (let i = 0; i < pixels.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      pixels[i + c] = (pixels[i + c] - lo) * 255 / (hi - lo);   // canvas clamps to 0–255 for us
+    }
+    // small saturation boost: push each colour 8 % away from the grey value
+    const grey = (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
+    for (let c = 0; c < 3; c++) pixels[i + c] = grey + (pixels[i + c] - grey) * 1.08;
+  }
+}
+
+document.getElementById('analyzeButton').addEventListener('click', async () => {
+  if (!photo) return;
+  const button = document.getElementById('analyzeButton');
+  const status = document.getElementById('aiStatus');
+  button.disabled = true;
+  status.textContent = 'Reading the cover… (5–15 seconds)';
+  try {
+    const data = await callApi('analyzeCover', { imageBase64: photo.base64, mimeType: photo.mimeType });
+    fillFormFromAi(data.draft);
+
+    // The AI also told us WHERE the cover is → crop to it
+    cleanCover = polishCover(originalImage, data.draft.coverBox);
+    document.getElementById('photoPreview').src = 'data:image/jpeg;base64,' + cleanCover.base64;
+    const pct = Math.round((data.draft.confidence || 0) * 100);
+    status.textContent = `Filled by AI (confidence ${pct}%). Please check before saving.`;
+  } catch (err) {
+    status.textContent = err.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+// Put the AI's answer into the form. The admin still reviews and clicks Save.
+function fillFormFromAi(draft) {
+  const f = form.elements;
+  const set = (name, value) => {
+    if (value === undefined || value === null || value === '') return;
+    f[name].value = value;
+    f[name].classList.remove('ai-filled'); void f[name].offsetWidth;   // restart the highlight animation
+    f[name].classList.add('ai-filled');
+  };
+  set('title', draft.title);
+  set('author', draft.author);
+  set('categories', (draft.categories || []).join(', '));
+  set('isbn', draft.isbn);
+  set('publisher', draft.publisher);
+  set('year', draft.year);
+  set('coverUrl', draft.coverUrl);
+  if (draft.language) {
+    // If the AI says e.g. "French", add it to the dropdown first
+    const select = f.language;
+    if (![...select.options].some(o => o.value === draft.language)) select.add(new Option(draft.language));
+    set('language', draft.language);
+  }
+  f.isTranslation.checked = draft.isTranslation === true;
+}
 
 // First load when the page opens
 loadBooks();
