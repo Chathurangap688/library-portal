@@ -28,6 +28,7 @@ main { padding: 24px; }
 
 /* A coloured box standing in for the cover photo */
 .cover {
+  position: relative;              /* Lesson 5: lets the status label sit in the corner */
   aspect-ratio: 2 / 3;            /* book shape: 2 wide, 3 tall */
   background: #1f4e46;
   color: white;
@@ -89,3 +90,67 @@ main { padding: 24px; }
   background: transparent; color: white; border: 1px solid rgba(255,255,255,.5);
   border-radius: 999px; padding: 4px 12px; cursor: pointer;
 }
+
+/* ---------- Lesson 5 ---------- */
+.book { cursor: pointer; }
+.book:hover .cover { transform: translateY(-3px); transition: transform .15s; }
+.stars { color: #c98a12; font-size: 0.9rem; }
+.stars small { color: #676b68; }
+.status {
+  position: absolute; top: 8px; left: 8px;
+  background: white; color: #1d1f1e; font-size: 0.7rem; padding: 2px 8px; border-radius: 999px;
+}
+.status.read { background: #c98a12; color: white; }
+
+dialog {
+  border: none; border-radius: 14px; padding: 24px;
+  width: min(560px, calc(100vw - 32px)); max-height: 85vh;
+}
+dialog::backdrop { background: rgba(0, 0, 0, .5); }
+#closeDialog {
+  float: right; background: none; border: none; font-size: 28px; line-height: 1; cursor: pointer;
+}
+dialog h2 { margin-top: 0; }
+
+.status-buttons { display: inline-flex; border: 1px solid #ddd6c8; border-radius: 999px; overflow: hidden; }
+.status-buttons button { border: none; background: white; padding: 8px 16px; cursor: pointer; }
+.status-buttons button.active { background: #1f4e46; color: white; }
+
+.rate-box { background: #f6f3ec; border-radius: 10px; padding: 12px; margin: 16px 0; }
+.star-picker button { background: none; border: none; font-size: 28px; color: #ccc; cursor: pointer; padding: 0 2px; }
+.star-picker button.on { color: #c98a12; }
+.rate-box textarea { width: 100%; box-sizing: border-box; margin: 8px 0; padding: 8px; font: inherit; }
+#saveRating { background: #1f4e46; color: white; border: none; border-radius: 8px; padding: 8px 16px; cursor: pointer; }
+
+.reviews { list-style: none; padding: 0; }
+.reviews li { border-top: 1px solid #ddd6c8; padding: 8px 0; }
+.reviews p { margin: 4px 0 0; }
+
+/* ---------- Lesson 6 ---------- */
+#addBookButton {
+  background: #c98a12; color: white; border: none; border-radius: 999px;
+  padding: 6px 14px; cursor: pointer; font-weight: bold;
+}
+#addBookButton[hidden] { display: none; }
+
+#bookForm { display: flex; flex-direction: column; gap: 10px; }
+#bookForm h2 { margin: 0 0 4px; }
+#bookForm label { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: #676b68; }
+#bookForm input, #bookForm select, #bookForm textarea {
+  font: inherit; color: #1d1f1e; padding: 8px; border: 1px solid #ddd6c8; border-radius: 8px;
+}
+#bookForm .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+#bookForm label.check { flex-direction: row; align-items: center; margin-top: 20px; }
+#bookForm fieldset { border: 1px solid #ddd6c8; border-radius: 10px; display: flex; flex-direction: column; gap: 10px; }
+.form-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+.form-buttons button, .admin-box button {
+  border: 1px solid #ddd6c8; background: white; border-radius: 8px; padding: 8px 16px; cursor: pointer;
+}
+#saveBook { background: #1f4e46; color: white; border-color: #1f4e46; }
+#saveBook:disabled { opacity: .6; }
+
+.admin-box { margin-top: 16px; padding: 12px; border: 1px dashed #c98a12; border-radius: 10px; }
+.admin-box h3 { margin-top: 0; }
+.admin-box table { font-size: 0.9rem; margin-bottom: 10px; }
+.admin-box th { text-align: left; color: #676b68; font-weight: normal; padding-right: 12px; }
+.admin-box .danger { color: #a3312a; }

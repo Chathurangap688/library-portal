@@ -20,6 +20,7 @@
 
     <!-- Lesson 4: shown when signed IN -->
     <div id="userBox" hidden>
+      <button id="addBookButton" type="button" hidden>+ Add book</button>
       <img id="userPicture" alt="" referrerpolicy="no-referrer">
       <span id="userName"></span>
       <span id="userRole" class="role"></span>
@@ -49,5 +50,54 @@
     <!-- JavaScript fills this empty box with book cards -->
     <div id="grid"></div>
   </main>
+
+  <!-- Lesson 5: book detail popup. Hidden until dialog.showModal() -->
+  <dialog id="bookDialog">
+    <button type="button" id="closeDialog" aria-label="Close">×</button>
+    <div id="bookDetail"></div>
+  </dialog>
+
+  <!-- Lesson 6: add / edit form (admins only) -->
+  <dialog id="editDialog">
+    <form id="bookForm">
+      <h2 id="formTitle">Add a book</h2>
+      <input type="hidden" name="id">
+
+      <label>Title *<input name="title" required></label>
+      <label>Author<input name="author"></label>
+      <label>Categories <small>(comma separated)</small><input name="categories" placeholder="Fiction, History"></label>
+      <div class="two">
+        <label>Language
+          <select name="language">
+            <option>English</option><option>Sinhala</option><option>Tamil</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" name="isTranslation"> Translation</label>
+      </div>
+      <div class="two">
+        <label>ISBN<input name="isbn" inputmode="numeric"></label>
+        <label>Year<input name="year" inputmode="numeric"></label>
+      </div>
+      <div class="two">
+        <label>Publisher<input name="publisher"></label>
+        <label>Shelf<input name="shelf" placeholder="Rack A, shelf 2"></label>
+      </div>
+
+      <fieldset>
+        <legend>Purchase details <small>(admins only)</small></legend>
+        <div class="two">
+          <label>Bought from<input name="purchasedFrom" placeholder="Sarasavi"></label>
+          <label>Date<input name="purchaseDate" type="date"></label>
+        </div>
+        <label>Price (LKR)<input name="price" inputmode="decimal"></label>
+        <label>Notes<textarea name="notes" rows="2"></textarea></label>
+      </fieldset>
+
+      <div class="form-buttons">
+        <button type="button" id="cancelEdit">Cancel</button>
+        <button type="submit" id="saveBook">Save</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>
