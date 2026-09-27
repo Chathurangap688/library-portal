@@ -150,6 +150,14 @@ function doPost(e) {
       requireAdmin(user);
       return jsonResponse({ ok: true, draft: analyzeCover(request.imageBase64, request.mimeType) });
     }
+    if (request.action === 'checkDuplicates') {       // Lesson 11
+      requireAdmin(user);
+      return jsonResponse({ ok: true, duplicates: findDuplicates(request.book || {}, request.book && request.book.id) });
+    }
+    if (request.action === 'addCopy') {               // Lesson 11
+      requireAdmin(user);
+      return jsonResponse({ ok: true, book: addCopy(request.bookId) });
+    }
     if (request.action === 'deleteBook') {
       requireAdmin(user);
       return jsonResponse({ ok: true, result: deleteBook(request.bookId) });
@@ -158,7 +166,7 @@ function doPost(e) {
     return jsonResponse({ ok: false, error: 'Unknown action: ' + request.action });
   } catch (err) {
     // code 'AUTH' tells the browser "show the login screen again"
-    return jsonResponse({ ok: false, error: err.message, code: err.code || '' });
+    return jsonResponse({ ok: false, error: err.message, code: err.code || '', details: err.details || null });
   }
 }
 
@@ -429,7 +437,8 @@ const BOOK_FIELDS = ['id', 'title', 'author', 'categories', 'isTranslation', 'la
   'coverUrl', 'coverFileId',                         // Lesson 7
   'titleSinglish', 'authorSinglish',                 // Lesson 7c: for English-keyboard search
   'translator', 'originalTitle', 'originalAuthor',    // Lesson 7d: translations
-  'description', 'reviewSummary', 'webSources'];      // Lesson 7d: from the web
+  'description', 'reviewSummary', 'webSources',       // Lesson 7d: from the web
+  'copies'];                                          // Lesson 11: how many of this book we own
 
 // Only admins see these (removed from the public doGet answer)
 const PRIVATE_FIELDS = ['purchasedFrom', 'purchaseDate', 'price', 'notes', 'addedBy'];
@@ -465,6 +474,18 @@ function saveBook(user, input, imageBase64) {
   const now = new Date().toISOString();
   const isNew = !input.id;
 
+  // Lesson 11: stop accidental duplicates. The browser can say "yes, it IS a different book"
+  // with allowDuplicate: true (after the admin saw the warning).
+  if (isNew && input.allowDuplicate !== true) {
+    const dups = findDuplicates(input, null);
+    if (dups.length) {
+      const err = new Error('This book seems to be in the library already: "' + dups[0].title + '"');
+      err.code = 'DUPLICATE';
+      err.details = dups;                   // sent to the browser so it can show the matches
+      throw err;
+    }
+  }
+
   // Start from the existing row (so columns the form does not know about are kept)
   const existing = isNew ? {} : readRows(sheet).find(r => String(r.id) === String(input.id));
   if (!isNew && !existing) throw new Error('Book not found');
@@ -480,6 +501,9 @@ function saveBook(user, input, imageBase64) {
   book.categories = (Array.isArray(input.categories) ? input.categories : String(input.categories || '').split(','))
     .map(c => String(c).trim()).filter(c => c).join(', ');     // sheet stores "A, B"
   book.isTranslation = input.isTranslation === true;
+  // copies: a whole number from 1 to 99 (anything strange becomes 1)
+  const copies = Math.round(Number(input.copies));
+  book.copies = copies >= 1 && copies <= 99 ? copies : (existing.copies || 1);
 
   // System fields: set by the SERVER, not the browser
   if (isNew) {
@@ -1185,4 +1209,52 @@ function endSession(token) {
   const hash = sha256(token);
   CacheService.getScriptCache().remove('s_' + hash);
   deleteRowsWhere(getSheet('Sessions', SESSION_HEADERS), r => r.tokenHash === hash);
+}
+
+
+// =====================================================================
+// Lesson 11: duplicate detection
+// Same book = same ISBN, OR same title with the same (or unknown) author.
+// Titles are compared as a "key": lower case, no spaces/punctuation, so
+// "Madol Doova", "madol-doova" and "MADOL DOOVA " all match. Sinhala works too.
+// =====================================================================
+
+function titleKey(text) {
+  return String(text || '').normalize('NFC').toLowerCase()
+    .replace(/\u200d/g, '')                             // invisible joiner in Sinhala (ක්‍ර)
+    .replace(/[^a-z0-9\u0D80-\u0DFF]+/g, '');          // keep a–z, 0–9 and Sinhala letters only
+}
+
+/** Books that look like the same book as `input` (ignoring the book with id `excludeId`). */
+function findDuplicates(input, excludeId) {
+  const isbn = String(input.isbn || '').replace(/[^0-9Xx]/g, '');
+  const titles = [titleKey(input.title), titleKey(input.titleSinglish)].filter(t => t.length >= 3);
+  const authors = [titleKey(input.author), titleKey(input.authorSinglish)].filter(a => a);
+  if (!isbn && !titles.length) return [];
+
+  return readBooks().filter(b => {
+    if (excludeId && String(b.id) === String(excludeId)) return false;
+    const bIsbn = String(b.isbn || '').replace(/[^0-9Xx]/g, '');
+    if (isbn && bIsbn && isbn === bIsbn) return true;               // same ISBN = same book
+
+    const bTitles = [titleKey(b.title), titleKey(b.titleSinglish)].filter(t => t);
+    const sameTitle = titles.some(t => bTitles.includes(t));
+    if (!sameTitle) return false;
+    const bAuthors = [titleKey(b.author), titleKey(b.authorSinglish)].filter(a => a);
+    // Same title AND (an author is missing on one side OR the authors match)
+    return !authors.length || !bAuthors.length || authors.some(a => bAuthors.includes(a));
+  }).map(b => ({ id: b.id, title: b.title, author: b.author, coverUrl: b.coverUrl,
+    copies: Number(b.copies) || 1, shelf: b.shelf || '' }));
+}
+
+/** +1 copy of an existing book (no new row, no new photo in Drive). */
+function addCopy(bookId) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  const headers = ensureBookColumns(sheet);
+  const book = readRows(sheet).find(r => String(r.id) === String(bookId));
+  if (!book) throw new Error('Book not found');
+  book.copies = (Number(book.copies) || 1) + 1;
+  book.updatedAt = new Date().toISOString();
+  upsertRow(sheet, r => String(r.id) === String(bookId), headers.map(h => book[h] === undefined ? '' : book[h]));
+  return { id: book.id, title: book.title, copies: book.copies };
 }

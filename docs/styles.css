@@ -326,3 +326,18 @@ dialog h2 { margin-top: 0; }
 .user-actions button.primary { background: #1f4e46; color: white; border-color: #1f4e46; }
 .user-actions button.danger { color: #a3312a; }
 @media (max-width: 480px) { .user-row { grid-template-columns: 40px 1fr; } .user-actions { grid-column: 1 / -1; } }
+
+/* ---------- Lesson 11: duplicate warning ---------- */
+#dupWarning { border: 2px solid #c98a12; background: #fff8e6; border-radius: 10px; padding: 10px;
+  display: flex; flex-direction: column; gap: 8px; }
+#dupWarning[hidden] { display: none; }
+.dup-row { display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center; }
+.dup-row img, .dup-nocover { width: 44px; height: 64px; object-fit: cover; border-radius: 4px; background: #ddd6c8;
+  display: flex; align-items: center; justify-content: center; }
+.dup-row small { color: #676b68; }
+.dup-actions { display: flex; gap: 6px; }
+.dup-actions button { border: 1px solid #ddd6c8; background: white; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+.dup-actions button.primary { background: #1f4e46; color: white; border-color: #1f4e46; }
+#dupWarning .link { background: none; border: none; color: #1f4e46; text-decoration: underline; cursor: pointer;
+  text-align: left; padding: 0; font: inherit; font-size: 0.85rem; }
+#bookForm label.copies { max-width: 120px; }

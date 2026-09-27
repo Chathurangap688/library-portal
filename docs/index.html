@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>My Library</title>
   <!-- ?v=… = "cache busting": change the number on every release so browsers fetch the NEW files -->
-  <link rel="stylesheet" href="styles.css?v=2026092802">
+  <link rel="stylesheet" href="styles.css?v=2026092803">
   <!-- defer = download now, but run only after the whole page is built -->
-  <script src="config.js?v=2026092802" defer></script>
-  <script src="app.js?v=2026092802" defer></script>
+  <script src="config.js?v=2026092803" defer></script>
+  <script src="app.js?v=2026092803" defer></script>
   <!-- Lesson 4: Google's sign-in library -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -138,6 +138,9 @@
         </div>
       </div>
 
+      <!-- Lesson 11: "this book is already in the library" -->
+      <div id="dupWarning" hidden></div>
+
       <label>Title *<input name="title" required></label>
       <label>Author<input name="author"></label>
       <div class="two">
@@ -196,6 +199,7 @@
         <label>Publisher<input name="publisher"></label>
         <label>Shelf<input name="shelf" placeholder="Rack A, shelf 2"></label>
       </div>
+      <label class="copies">Copies<input name="copies" type="number" min="1" max="99" value="1"></label>
 
       <fieldset>
         <legend>Purchase details <small>(admins only)</small></legend>

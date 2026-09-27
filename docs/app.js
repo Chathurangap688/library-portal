@@ -79,6 +79,7 @@ function bookCard(book) {
   const status = currentUser ? (myData.status[book.id] || 'to_read') : '';
   const statusLabel = status === 'read' ? '<span class="status read">✓ Read</span>'
     : status === 'reading' ? '<span class="status">Reading</span>' : '';
+  const copiesLabel = Number(book.copies) > 1 ? ` · ${Number(book.copies)} copies` : '';   // Lesson 11
   const stars = book.ratingCount
     ? `<div class="stars">${starText(book.ratingAvg)} <small>${book.ratingAvg} (${book.ratingCount})</small></div>` : '';
 
@@ -89,7 +90,7 @@ function bookCard(book) {
       ${coverHtml(book, statusLabel)}
       <div class="title">${escapeHtml(book.title)}</div>
       <div class="author">${escapeHtml(book.author)}</div>
-      <div class="meta">${escapeHtml(book.language)} · ${escapeHtml(book.categories.join(', '))}</div>
+      <div class="meta">${escapeHtml(book.language)} · ${escapeHtml(book.categories.join(', '))}${copiesLabel}</div>
       ${stars}
       ${badge}
     </div>
@@ -368,7 +369,10 @@ async function callApi(action, params = {}) {
     }
     // Lesson 10: account not (or no longer) active → waiting screen
     if (data.code === 'PENDING' && currentUser) showPendingScreen(currentUser);
-    throw new Error(data.error);
+    const err = new Error(data.error);
+    err.code = data.code;            // Lesson 11: e.g. 'DUPLICATE'
+    err.details = data.details;      //            the matching books
+    throw err;
   }
   return data;
 }
@@ -727,7 +731,7 @@ function adminDetails(book) {
       <h3>Admin</h3>
       <table>
         ${row('ISBN', book.isbn)}${row('Publisher', book.publisher)}${row('Year', book.year)}
-        ${row('Shelf', book.shelf)}${row('Bought from', book.purchasedFrom)}
+        ${row('Shelf', book.shelf)}${row('Copies', book.copies > 1 ? String(book.copies) : '')}${row('Bought from', book.purchasedFrom)}
         ${row('Purchase date', String(book.purchaseDate || '').slice(0, 10))}${row('Price', book.price)}
         ${row('Notes', book.notes)}${row('Added by', book.addedBy)}
       </table>
@@ -746,7 +750,7 @@ function openEditor(bookId) {
     // form.elements.title = the <input name="title">
     ['id', 'title', 'author', 'titleSinglish', 'authorSinglish', 'language', 'isbn', 'publisher', 'year', 'shelf',
      'purchasedFrom', 'price', 'notes', 'coverUrl',
-     'translator', 'originalTitle', 'originalAuthor', 'description', 'reviewSummary', 'webSources'].forEach(name => {
+     'translator', 'originalTitle', 'originalAuthor', 'description', 'reviewSummary', 'webSources', 'copies'].forEach(name => {
       form.elements[name].value = book[name] || '';
     });
     renderCategoryChips(book.categories || []);
@@ -760,6 +764,8 @@ function openEditor(bookId) {
   showTranslationFields();
   document.getElementById('webStatus').textContent = '';
   document.getElementById('webResults').hidden = true;
+  hideDuplicates();                                // Lesson 11
+  if (!form.elements.copies.value) form.elements.copies.value = 1;
   resetPhoto(book ? book.coverUrl : '');     // Lesson 7
   editDialog.showModal();
   form.elements.title.focus();
@@ -783,6 +789,8 @@ form.addEventListener('submit', async event => {
     description: f.description.value,
     reviewSummary: f.reviewSummary.value,
     webSources: f.webSources.value,
+    copies: Number(f.copies.value) || 1,
+    allowDuplicate: allowDuplicate,           // Lesson 11: true after "It's a different book" 
     language: f.language.value,
     isTranslation: f.isTranslation.checked,
     isbn: f.isbn.value, publisher: f.publisher.value, year: f.year.value, shelf: f.shelf.value,
@@ -801,7 +809,8 @@ form.addEventListener('submit', async event => {
     await loadBooks();
     openBook(data.book.id);                 // show the saved book
   } catch (err) {
-    alert('Could not save: ' + err.message);
+    if (err.code === 'DUPLICATE') showDuplicates(err.details || []);   // the server caught a duplicate
+    else alert('Could not save: ' + err.message);
   } finally {
     saveButton.disabled = false;
     saveButton.textContent = 'Save';
@@ -986,6 +995,7 @@ document.getElementById('analyzeButton').addEventListener('click', async () => {
 
     // Lesson 8e: straight away check the web — adds details AND fixes a mis-read title
     runWebLookup(true);          // no await: the admin can already look at the form
+    checkDuplicatesNow();        // Lesson 11: is this book already in the library?
   } catch (err) {
     status.textContent = err.message;
   } finally {
@@ -1233,6 +1243,7 @@ function applyWebResults(auto) {
   const left = box.querySelectorAll('.web-row').length;
   box.hidden = left === 0;
   const status = document.getElementById('webStatus');
+  if (applied.includes('title')) checkDuplicatesNow();   // title changed → check again
   if (applied.includes('title')) status.textContent = `✏️ Title corrected: "${oldTitle}" → "${f.title.value}". `;
   else status.textContent = '';
   status.textContent += applied.length
@@ -1297,5 +1308,78 @@ async function startup() {
     if (document.getElementById('loginScreen').hidden) showLoginScreen('Could not reach the server: ' + err.message);
   }
 }
+
+// ------------------------------------------------------------------
+// Lesson 11: "already in the library?" warning
+// ------------------------------------------------------------------
+let allowDuplicate = false;
+
+// Ask the server BEFORE saving (right after the AI read the cover)
+async function checkDuplicatesNow() {
+  const f = form.elements;
+  if (f.id.value || !f.title.value.trim()) return;       // only for NEW books
+  try {
+    const book = {};
+    ['title', 'author', 'titleSinglish', 'authorSinglish', 'isbn'].forEach(k => { book[k] = f[k].value; });
+    const { duplicates } = await callApi('checkDuplicates', { book: book });
+    if (duplicates.length) showDuplicates(duplicates); else hideDuplicates();
+  } catch (err) { console.warn('Duplicate check failed:', err); }   // never block adding a book
+}
+
+function showDuplicates(list) {
+  const box = document.getElementById('dupWarning');
+  box.innerHTML = `
+    <b>⚠️ This book may already be in the library:</b>
+    ${list.map(d => `
+      <div class="dup-row">
+        ${d.coverUrl ? `<img src="${escapeHtml(d.coverUrl)}" alt="" referrerpolicy="no-referrer">` : '<div class="dup-nocover">📕</div>'}
+        <div>
+          <b>${escapeHtml(d.title)}</b><br>
+          <small>${escapeHtml(d.author || '')} · ${d.copies} ${d.copies === 1 ? 'copy' : 'copies'}${d.shelf ? ' · ' + escapeHtml(d.shelf) : ''}</small>
+        </div>
+        <div class="dup-actions">
+          <button type="button" data-dup="copy" data-id="${escapeHtml(d.id)}" class="primary">+1 copy</button>
+          <button type="button" data-dup="open" data-id="${escapeHtml(d.id)}">Open</button>
+        </div>
+      </div>`).join('')}
+    <button type="button" data-dup="different" class="link">No — it's a different book (e.g. another edition)</button>`;
+  box.hidden = false;
+  box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function hideDuplicates() {
+  allowDuplicate = false;
+  document.getElementById('dupWarning').hidden = true;
+}
+
+document.getElementById('dupWarning').addEventListener('click', async event => {
+  const button = event.target.closest('button[data-dup]');
+  if (!button) return;
+  const id = button.dataset.id;
+
+  if (button.dataset.dup === 'different') {       // admin decides: save as a separate book
+    allowDuplicate = true;
+    document.getElementById('dupWarning').hidden = true;
+    document.getElementById('webStatus').textContent = 'OK — it will be saved as a separate book.';
+    return;
+  }
+  if (button.dataset.dup === 'open') {            // look at the existing book instead
+    editDialog.close();
+    openBook(id);
+    return;
+  }
+  // "+1 copy": same book, one more on the shelf → no new record, no new photo
+  button.disabled = true;
+  try {
+    const { book } = await callApi('addCopy', { bookId: id });
+    editDialog.close();
+    await loadBooks();
+    openBook(book.id);
+    alert(`Added: "${book.title}" now has ${book.copies} copies.`);
+  } catch (err) {
+    alert(err.message);
+    button.disabled = false;
+  }
+});
 
 startup();
