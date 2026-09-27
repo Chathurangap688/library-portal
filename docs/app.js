@@ -366,6 +366,8 @@ async function callApi(action, params = {}) {
       forgetSession();
       showLoginScreen(data.error);
     }
+    // Lesson 10: account not (or no longer) active → waiting screen
+    if (data.code === 'PENDING' && currentUser) showPendingScreen(currentUser);
     throw new Error(data.error);
   }
   return data;
@@ -398,6 +400,7 @@ function forgetSession() {
 
 // Which screen is visible: 'startup' | 'login' | 'app'
 function showScreen(name) {
+  document.getElementById('pendingScreen').hidden = name !== 'pending';
   document.getElementById('startupScreen').hidden = name !== 'startup';
   document.getElementById('loginScreen').hidden = name !== 'login';
   document.getElementById('app').hidden = name !== 'app';
@@ -419,11 +422,112 @@ function showLoginScreen(message) {
 // After a successful login OR a still-valid saved session
 async function startApp(data) {
   currentUser = data.user;
+  // Lesson 10: signed in but not activated yet → only the waiting screen
+  if (currentUser.status !== 'active') { showPendingScreen(currentUser); return; }
   myData = data.myData || { status: {}, ratings: {} };
   showUser();
   showScreen('app');
   await loadBooks();
   loadRecommendations();          // Lesson 8 (no await)
+  if (isAdmin()) refreshPendingBadge();   // Lesson 10
+}
+
+// ------------------------------------------------------------------
+// Lesson 10: waiting screen + admin "Users" panel
+// ------------------------------------------------------------------
+function showPendingScreen(user) {
+  books = [];
+  document.getElementById('grid').innerHTML = '';
+  document.querySelectorAll('dialog[open]').forEach(d => d.close());
+  document.getElementById('pendingName').textContent = (user.name || '').split(' ')[0];
+  document.getElementById('pendingEmail').textContent = 'Signed in as ' + user.email;
+  document.getElementById('pendingPicture').src = user.picture || '';
+  showScreen('pending');
+}
+
+// "Refresh" = simply reload the page: startup() asks the server again with the saved cookie
+document.getElementById('pendingRefresh').addEventListener('click', () => location.reload());
+document.getElementById('pendingSignOut').addEventListener('click', () => signOut());
+
+const usersDialog = document.getElementById('usersDialog');
+let userList = [];
+
+document.getElementById('usersButton').addEventListener('click', () => {
+  usersDialog.showModal();
+  loadUsers();
+});
+usersDialog.querySelector('.close-users').addEventListener('click', () => usersDialog.close());
+
+async function loadUsers() {
+  const status = document.getElementById('usersStatus');
+  status.textContent = 'Loading…';
+  try {
+    userList = (await callApi('listUsers')).users;
+    // Waiting people first, then by name
+    userList.sort((a, b) => (a.status === 'pending' ? 0 : 1) - (b.status === 'pending' ? 0 : 1) ||
+      String(a.name).localeCompare(String(b.name)));
+    const waiting = userList.filter(u => u.status === 'pending').length;
+    status.textContent = `${userList.length} user(s)` + (waiting ? ` · ${waiting} waiting for activation` : '');
+    renderUsers();
+    setPendingBadge(waiting);
+  } catch (err) {
+    status.textContent = err.message;
+  }
+}
+
+function renderUsers() {
+  document.getElementById('usersList').innerHTML = userList.map(u => {
+    const me = u.email === currentUser.email;
+    return `
+      <div class="user-row ${u.status}">
+        <img src="${escapeHtml(u.picture || '')}" alt="" referrerpolicy="no-referrer">
+        <div class="user-info">
+          <b>${escapeHtml(u.name || u.email)}</b>
+          ${u.role === 'admin' ? '<span class="role">Admin</span>' : ''}
+          <span class="pill ${u.status}">${u.status === 'active' ? 'Active' : 'Waiting'}</span><br>
+          <small>${escapeHtml(u.email)} · joined ${escapeHtml(u.createdAt)} · last seen ${escapeHtml(u.lastLogin)}</small>
+        </div>
+        <div class="user-actions" data-email="${escapeHtml(u.email)}">
+          ${me ? '<small>(you)</small>' : `
+            ${u.status === 'active'
+              ? '<button type="button" data-do="pending">Deactivate</button>'
+              : '<button type="button" data-do="active" class="primary">Activate</button>'}
+            <button type="button" data-do="delete" class="danger">Delete</button>`}
+        </div>
+      </div>`;
+  }).join('') || '<p>No users yet.</p>';
+}
+
+// One listener for all Activate / Deactivate / Delete buttons (event delegation)
+document.getElementById('usersList').addEventListener('click', async event => {
+  const button = event.target.closest('button[data-do]');
+  if (!button) return;
+  const email = button.closest('.user-actions').dataset.email;
+  const what = button.dataset.do;
+  if (what === 'delete' &&
+      !confirm(`Delete ${email}? Their ratings and reading history are deleted too. They can sign in again later (as a new, waiting user).`)) return;
+  button.disabled = true;
+  try {
+    if (what === 'delete') await callApi('deleteUser', { email: email });
+    else await callApi('setUserStatus', { email: email, status: what });
+    await loadUsers();
+  } catch (err) {
+    alert(err.message);
+    button.disabled = false;
+  }
+});
+
+async function refreshPendingBadge() {
+  try {
+    const users = (await callApi('listUsers')).users;
+    setPendingBadge(users.filter(u => u.status === 'pending').length);
+  } catch (e) { /* not important */ }
+}
+
+function setPendingBadge(count) {
+  const badge = document.getElementById('pendingBadge');
+  badge.textContent = count;
+  badge.hidden = count === 0;
 }
 
 // Only for LEARNING: peek inside a JWT. This does NOT prove it is real —
@@ -436,7 +540,7 @@ function decodeJwtPayload(token) {
 // Google calls this after the user picks their account
 async function handleCredential(response) {
   idToken = response.credential;
-  console.log('ID token claims (unverified):', decodeJwtPayload(idToken));
+  try { console.log('ID token claims (unverified):', decodeJwtPayload(idToken)); } catch (e) { /* debug only */ }
 
   const status = document.getElementById('loginStatus');
   status.textContent = 'Signing in…';
@@ -464,6 +568,7 @@ function showUser() {
   }
   // Lesson 6: only admins see the Add button (just convenience — the SERVER enforces it)
   document.getElementById('addBookButton').hidden = !isAdmin();
+  document.getElementById('usersButton').hidden = !isAdmin();     // Lesson 10
 }
 
 async function signOut() {

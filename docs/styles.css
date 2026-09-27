@@ -292,3 +292,37 @@ dialog h2 { margin-top: 0; }
 .login-card p { color: #676b68; line-height: 1.5; }
 #loginButton { display: flex; justify-content: center; margin: 20px 0 8px; min-height: 44px; }
 #loginStatus { font-size: 0.9rem; min-height: 1.2em; }
+
+/* ---------- Lesson 10: waiting screen + users panel ---------- */
+#pendingScreen {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(160deg, #1f4e46, #12302b); padding: 16px; box-sizing: border-box;
+}
+#pendingScreen[hidden] { display: none; }
+.pending-pic { width: 72px; height: 72px; border-radius: 50%; background: #eee; }
+.pending-buttons { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.pending-buttons button { border: 1px solid #ddd6c8; background: white; border-radius: 8px; padding: 10px; cursor: pointer; font: inherit; }
+#pendingRefresh { background: #1f4e46; color: white; border-color: #1f4e46; }
+
+#usersButton {
+  background: transparent; color: white; border: 1px solid rgba(255,255,255,.5);
+  border-radius: 999px; padding: 6px 14px; cursor: pointer;
+}
+#usersButton[hidden] { display: none; }
+#pendingBadge { background: #c98a12; border-radius: 999px; padding: 0 7px; margin-left: 4px; font-weight: bold; }
+#pendingBadge[hidden] { display: none; }
+.close-users { float: right; background: none; border: none; font-size: 28px; line-height: 1; cursor: pointer; }
+#usersDialog h2 { margin-top: 0; }
+#usersStatus { color: #676b68; font-size: 0.9rem; }
+.user-row { display: grid; grid-template-columns: 40px 1fr auto; gap: 10px; align-items: center;
+  padding: 10px 0; border-top: 1px solid #ddd6c8; }
+.user-row.pending { background: #fffbef; }
+.user-row img { width: 40px; height: 40px; border-radius: 50%; background: #eee; }
+.user-info small { color: #676b68; }
+.pill { font-size: 0.7rem; padding: 2px 8px; border-radius: 999px; background: #dfeae6; color: #1f4e46; }
+.pill.pending { background: #fff1c7; color: #6b4d00; }
+.user-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.user-actions button { border: 1px solid #ddd6c8; background: white; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+.user-actions button.primary { background: #1f4e46; color: white; border-color: #1f4e46; }
+.user-actions button.danger { color: #a3312a; }
+@media (max-width: 480px) { .user-row { grid-template-columns: 40px 1fr; } .user-actions { grid-column: 1 / -1; } }

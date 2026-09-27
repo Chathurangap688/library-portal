@@ -4,10 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>My Library</title>
-  <link rel="stylesheet" href="styles.css">
+  <!-- ?v=… = "cache busting": change the number on every release so browsers fetch the NEW files -->
+  <link rel="stylesheet" href="styles.css?v=2026092802">
   <!-- defer = download now, but run only after the whole page is built -->
-  <script src="config.js" defer></script>
-  <script src="app.js" defer></script>
+  <script src="config.js?v=2026092802" defer></script>
+  <script src="app.js?v=2026092802" defer></script>
   <!-- Lesson 4: Google's sign-in library -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -23,6 +24,21 @@
     </div>
   </section>
 
+  <!-- Lesson 10: signed in, but an admin has not activated the account yet -->
+  <section id="pendingScreen" hidden>
+    <div class="login-card">
+      <img id="pendingPicture" class="pending-pic" alt="" referrerpolicy="no-referrer">
+      <h1>Hi <span id="pendingName"></span>!</h1>
+      <p>Your account is waiting for approval.<br>
+         <b>Please ask an admin to activate your account.</b></p>
+      <p><small id="pendingEmail"></small></p>
+      <div class="pending-buttons">
+        <button type="button" id="pendingRefresh">↻ I was activated — refresh</button>
+        <button type="button" id="pendingSignOut">Sign out</button>
+      </div>
+    </div>
+  </section>
+
   <!-- Shown while we check the saved session (so guests never see a flash of the app) -->
   <div id="startupScreen"><p>Loading…</p></div>
 
@@ -32,6 +48,7 @@
 
     <!-- Lesson 4: shown when signed IN -->
     <div id="userBox" hidden>
+      <button id="usersButton" type="button" hidden>👥 Users <span id="pendingBadge" hidden></span></button>
       <button id="addBookButton" type="button" hidden>+ Add book</button>
       <img id="userPicture" alt="" referrerpolicy="no-referrer">
       <span id="userName"></span>
@@ -78,6 +95,14 @@
     <div id="grid"></div>
   </main>
   </div> <!-- /#app -->
+
+  <!-- Lesson 10: admin — user accounts -->
+  <dialog id="usersDialog">
+    <button type="button" class="close-users" aria-label="Close">×</button>
+    <h2>Users</h2>
+    <p id="usersStatus"></p>
+    <div id="usersList"></div>
+  </dialog>
 
   <!-- Lesson 5: book detail popup. Hidden until dialog.showModal() -->
   <dialog id="bookDialog">

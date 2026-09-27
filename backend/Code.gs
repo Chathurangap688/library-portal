@@ -86,7 +86,7 @@ function doPost(e) {
       const user = verifyUser(request.idToken);          // Google says who this is
       const session = createSession(user.email);         // our own 30-day "ticket"
       return jsonResponse({ ok: true, sessionToken: session.token, expiresAt: session.expiresAt,
-        user: user, myData: getMyData(user.email) });
+        user: user, myData: user.status === 'active' ? getMyData(user.email) : null });
     }
 
     // EVERY other action needs a valid session (throws code 'AUTH' if missing or expired)
@@ -96,13 +96,30 @@ function doPost(e) {
       endSession(request.sessionToken);
       return jsonResponse({ ok: true });
     }
+    if (request.action === 'me') {                      // allowed for pending users too
+      return jsonResponse({ ok: true, user: user,
+        myData: user.status === 'active' ? getMyData(user.email) : null });
+    }
+
+    // Lesson 10: everything below needs an ACTIVE account
+    requireActive(user);
+
+    if (request.action === 'listUsers') {
+      requireAdmin(user);
+      return jsonResponse({ ok: true, users: listUsers() });
+    }
+    if (request.action === 'setUserStatus') {
+      requireAdmin(user);
+      return jsonResponse({ ok: true, result: setUserStatus(user, request.email, request.status) });
+    }
+    if (request.action === 'deleteUser') {
+      requireAdmin(user);
+      return jsonResponse({ ok: true, result: deleteUser(user, request.email) });
+    }
     if (request.action === 'books') {
       return jsonResponse(booksFor(user));
     }
 
-    if (request.action === 'me') {
-      return jsonResponse({ ok: true, user: user, myData: getMyData(user.email) });
-    }
     if (request.action === 'setStatus') {
       return jsonResponse({ ok: true, result: setStatus(user, request.bookId, request.status) });
     }
@@ -174,32 +191,95 @@ function verifyUser(idToken) {
 
 /** Adds the user to the Users sheet the first time, updates lastLogin after that. */
 function saveUser(email, name, picture) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName('Users');
-  if (!sheet) {                                   // create the sheet on first use
-    sheet = ss.insertSheet('Users');
-    sheet.appendRow(['email', 'name', 'picture', 'role', 'createdAt', 'lastLogin']);
-  }
-
-  const admins = (PropertiesService.getScriptProperties().getProperty('ADMIN_EMAILS') || '')
-    .split(',').map(s => s.trim().toLowerCase());
+  const sheet = getSheet('Users', USER_HEADERS);
+  const headers = ensureColumns(sheet, USER_HEADERS);      // adds "status" to old sheets
+  const admins = adminEmails();
   const now = new Date().toISOString();
-  const rows = sheet.getDataRange().getValues();
+  const rows = readRows(sheet);
+  const index = rows.findIndex(r => r.email === email);
+  const old = index === -1 ? null : rows[index];
 
-  // Look for an existing row with this email (row 0 is the header)
-  for (let i = 1; i < rows.length; i++) {
-    if (rows[i][0] === email) {
-      const role = admins.includes(email) ? 'admin' : (rows[i][3] || 'user');
-      // getRange(row, column, numRows, numColumns) — sheet rows start at 1, so i + 1
-      sheet.getRange(i + 1, 2, 1, 5).setValues([[name, picture, role, rows[i][4], now]]);
-      return { email: email, name: name, picture: picture, role: role };
-    }
+  const user = {
+    email: email, name: name, picture: picture,
+    role: admins.includes(email) ? 'admin' : ((old && old.role) || 'user'),
+    createdAt: old ? old.createdAt : now,
+    lastLogin: now,
+    // Lesson 10: NEW people wait for an admin. Users who existed before this feature
+    // (empty status) stay active, so nobody already using the library gets locked out.
+    status: admins.includes(email) ? 'active' : (old ? (old.status || 'active') : 'pending')
+  };
+  upsertRow(sheet, r => r.email === email, headers.map(h => user[h] === undefined ? '' : user[h]));
+  return publicUser(user);
+}
+
+// ---------- Lesson 10: user accounts (pending → active) ----------
+const USER_HEADERS = ['email', 'name', 'picture', 'role', 'createdAt', 'lastLogin', 'status'];
+
+function adminEmails() {
+  return (PropertiesService.getScriptProperties().getProperty('ADMIN_EMAILS') || '')
+    .split(',').map(x => x.trim().toLowerCase()).filter(x => x);
+}
+
+/** What the browser may know about a user */
+function publicUser(u) {
+  return { email: u.email, name: u.name, picture: u.picture, role: u.role, status: u.status };
+}
+
+/** Adds any missing header columns at the end of row 1. Returns the full header row. */
+function ensureColumns(sheet, wanted) {
+  const headers = sheet.getDataRange().getValues()[0];
+  const missing = wanted.filter(h => !headers.includes(h));
+  if (missing.length) sheet.getRange(1, headers.length + 1, 1, missing.length).setValues([missing]);
+  return headers.concat(missing);
+}
+
+function requireActive(user) {
+  if (user.status !== 'active') {
+    const err = new Error('Your account is waiting for an admin to activate it.');
+    err.code = 'PENDING';
+    throw err;
   }
+}
 
-  // Not found → new user
-  const role = admins.includes(email) ? 'admin' : 'user';
-  sheet.appendRow([email, name, picture, role, now, now]);
-  return { email: email, name: name, picture: picture, role: role };
+function listUsers() {
+  return readRows(getSheet('Users', USER_HEADERS)).map(u => ({
+    email: u.email, name: u.name, picture: u.picture,
+    role: adminEmails().includes(u.email) ? 'admin' : (u.role || 'user'),
+    status: adminEmails().includes(u.email) ? 'active' : (u.status || 'active'),
+    createdAt: String(u.createdAt).slice(0, 10), lastLogin: String(u.lastLogin).slice(0, 16).replace('T', ' ')
+  }));
+}
+
+/** Admin: activate / deactivate someone. */
+function setUserStatus(admin, email, status) {
+  if (!['active', 'pending'].includes(status)) throw new Error('Invalid status');
+  guardOtherUser(admin, email);
+  const sheet = getSheet('Users', USER_HEADERS);
+  const headers = ensureColumns(sheet, USER_HEADERS);
+  const row = readRows(sheet).find(r => r.email === email);
+  if (!row) throw new Error('User not found');
+  row.status = status;
+  upsertRow(sheet, r => r.email === email, headers.map(h => row[h] === undefined ? '' : row[h]));
+  return { email: email, status: status };
+}
+
+/** Admin: remove a user, their sessions, reading history and ratings. */
+function deleteUser(admin, email) {
+  guardOtherUser(admin, email);
+  const mine = r => r.email === email;
+  deleteRowsWhere(getSheet('Users', USER_HEADERS), mine);
+  deleteRowsWhere(getSheet('Sessions', SESSION_HEADERS), mine);        // signs them out everywhere
+  deleteRowsWhere(getSheet('Reading', ['email', 'bookId', 'status', 'updatedAt']), mine);
+  deleteRowsWhere(getSheet('Ratings', ['bookId', 'email', 'userName', 'rating', 'review', 'updatedAt']), mine);
+  return { email: email };
+}
+
+/** Admins cannot lock THEMSELVES out, and ADMIN_EMAILS people are protected. */
+function guardOtherUser(admin, email) {
+  email = String(email || '').toLowerCase();
+  if (!email) throw new Error('No email');
+  if (email === admin.email) throw new Error('You cannot change your own account');
+  if (adminEmails().includes(email)) throw new Error('This admin is set in ADMIN_EMAILS (Script properties)');
 }
 
 
@@ -1091,13 +1171,13 @@ function userFromSession(token) {
   }
 
   // Read the user fresh from the Users sheet → a role change (admin/user) works immediately
-  const users = readRows(getSheet('Users', ['email', 'name', 'picture', 'role', 'createdAt', 'lastLogin']));
+  const users = readRows(getSheet('Users', USER_HEADERS));
   const u = users.find(r => r.email === email);
-  if (!u) throw authError('User not found. Please sign in again.');
-  const admins = (PropertiesService.getScriptProperties().getProperty('ADMIN_EMAILS') || '')
-    .split(',').map(x => x.trim().toLowerCase());
+  if (!u) throw authError('Your account was removed. Please sign in again.');
+  const isAdminEmail = adminEmails().includes(u.email);
   return { email: u.email, name: u.name, picture: u.picture,
-    role: admins.includes(u.email) ? 'admin' : (u.role || 'user') };
+    role: isAdminEmail ? 'admin' : (u.role || 'user'),
+    status: isAdminEmail ? 'active' : (u.status || 'active') };
 }
 
 function endSession(token) {
