@@ -506,7 +506,7 @@ function answerText(answer) {
 }
 
 /** Sends ANY request body to Gemini, with retries + a backup model. Returns the full response object. */
-function geminiRequest(body) {
+function geminiRequest(body, quick) {
   const props = PropertiesService.getScriptProperties();
   const apiKey = props.getProperty('GEMINI_API_KEY');
   if (!apiKey) throw new Error('GEMINI_API_KEY is not set in Script properties');
@@ -517,7 +517,8 @@ function geminiRequest(body) {
   let res = null, code = 0;
   tryModels:
   for (const model of models) {
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    const maxAttempts = quick ? 1 : 3;          // quick = no waiting/retries (used by the web lookup)
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       res = UrlFetchApp.fetch(
         'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent', {
           method: 'post',
@@ -531,7 +532,7 @@ function geminiRequest(body) {
       if (code === 429) break;                      // this model's quota is used up → next model
       if (code !== 503 && code !== 500) break tryModels;   // a real error (bad key…) → stop
       // 503/500 = "busy right now": wait 1 s, 2 s, 4 s ("exponential backoff"), then retry
-      Utilities.sleep(1000 * Math.pow(2, attempt - 1));
+      if (attempt < maxAttempts) Utilities.sleep(1000 * Math.pow(2, attempt - 1));
     }
   }
 
@@ -672,6 +673,9 @@ function webLookup(input, imageBase64) {
 
   let info = null, mode = 'none', sources = [];
   const notes = [];
+  // Lesson 8f: time every step → shows up in Apps Script "Executions", so slow parts are easy to find
+  const started = Date.now();
+  const step = name => console.log(name + ' after ' + Math.round((Date.now() - started) / 1000) + ' s');
 
   // ---- 1. Search the web ourselves (free), then let Gemini read ONLY those pages ----
   // Gemini's built-in Google Search has no free quota on many keys, so we do the search:
@@ -680,6 +684,7 @@ function webLookup(input, imageBase64) {
   let pages = [];
   try {
     pages = searchTheWeb(input);
+    step('search found ' + pages.length + ' page(s)');
   } catch (err) {
     console.warn('Search failed: ' + err.message);
     notes.push('Search unavailable (' + err.message + ')');
@@ -694,7 +699,8 @@ function webLookup(input, imageBase64) {
           '\n\nUse ONLY the sources below (and the photo). If they are about a different book, set found to false.\n\n' +
           context }].concat(photoPart) }],
         generationConfig: { temperature: 0.1, responseMimeType: 'application/json' }
-      });
+      }, true);
+      step('AI read the pages');
       const fromWeb = parseJsonLoose(answerText(answer));
       if (fromWeb.found) {
         info = fromWeb;
@@ -708,12 +714,13 @@ function webLookup(input, imageBase64) {
   }
 
   // ---- 2. no search: the model's own knowledge ----
-  if (!info || !info.found) {
+  if ((!info || !info.found) && Date.now() - started < 60000) {   // skip if we already took > 1 minute
     try {
       const answer = geminiRequest({
         contents: [{ parts: [{ text: prompt }].concat(photoPart) }],
         generationConfig: { temperature: 0.2, responseMimeType: 'application/json' }
-      });
+      }, true);
+      step('AI knowledge');
       const fromAi = parseJsonLoose(answerText(answer));
       if (fromAi.found) { info = fromAi; mode = 'ai'; sources = []; }
     } catch (err) {

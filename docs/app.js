@@ -352,7 +352,19 @@ async function callApi(action, params = {}) {
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(body)
   });
-  const data = await response.json();
+  // Lesson 8f: read as TEXT first. When Apps Script itself fails (timeout, crash, quota)
+  // Google sends an HTML error page instead of our JSON → show its message, not "Unexpected token <"
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    const page = new DOMParser().parseFromString(text, 'text/html');   // read the HTML safely
+    const message = (page.body ? page.body.textContent : text).replace(/\s+/g, ' ').trim().slice(0, 200);
+    console.error('Non-JSON answer from Apps Script:', text);
+    throw new Error('Server problem (' + response.status + '): ' + (message || 'no details') +
+      ' — see Apps Script → Executions');
+  }
   if (!data.ok) throw new Error(data.error);
   return data;
 }
