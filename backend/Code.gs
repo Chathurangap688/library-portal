@@ -8,11 +8,15 @@
 const SHEET_NAME = 'Books';
 
 function doGet(e) {
-  const books = readBooks().map(hidePrivateFields);   // Lesson 6: public = no purchase info
-  addRatingsToBooks(books);            // Lesson 5: average stars + public reviews
-  return ContentService
-    .createTextOutput(JSON.stringify({ ok: true, books: books, categories: BOOK_CATEGORIES }))
-    .setMimeType(ContentService.MimeType.JSON);
+  // Lesson 9: the library is private now. Books are only sent to signed-in users (doPost 'books').
+  return jsonResponse({ ok: false, error: 'Please sign in', code: 'AUTH' });
+}
+
+/** Lesson 9: the book list for a signed-in user (admins also get the purchase details). */
+function booksFor(user) {
+  const books = user.role === 'admin' ? readBooks() : readBooks().map(hidePrivateFields);
+  addRatingsToBooks(books);
+  return { ok: true, books: books, categories: BOOK_CATEGORIES };
 }
 
 /** Reads every row of the Books sheet and turns it into a book object. */
@@ -77,8 +81,24 @@ function doPost(e) {
   try {
     const request = JSON.parse(e.postData.contents);
 
-    // Lesson 5: EVERY action needs a signed-in user, so verify first.
-    const user = verifyUser(request.idToken);   // throws if the token is bad
+    // Lesson 9: sign in ONCE with the Google ID token → we give back our own session token
+    if (request.action === 'login') {
+      const user = verifyUser(request.idToken);          // Google says who this is
+      const session = createSession(user.email);         // our own 30-day "ticket"
+      return jsonResponse({ ok: true, sessionToken: session.token, expiresAt: session.expiresAt,
+        user: user, myData: getMyData(user.email) });
+    }
+
+    // EVERY other action needs a valid session (throws code 'AUTH' if missing or expired)
+    const user = userFromSession(request.sessionToken);
+
+    if (request.action === 'logout') {
+      endSession(request.sessionToken);
+      return jsonResponse({ ok: true });
+    }
+    if (request.action === 'books') {
+      return jsonResponse(booksFor(user));
+    }
 
     if (request.action === 'me') {
       return jsonResponse({ ok: true, user: user, myData: getMyData(user.email) });
@@ -120,7 +140,8 @@ function doPost(e) {
 
     return jsonResponse({ ok: false, error: 'Unknown action: ' + request.action });
   } catch (err) {
-    return jsonResponse({ ok: false, error: err.message });
+    // code 'AUTH' tells the browser "show the login screen again"
+    return jsonResponse({ ok: false, error: err.message, code: err.code || '' });
   }
 }
 
@@ -131,13 +152,13 @@ function jsonResponse(obj) {
 
 /** Checks the ID token with Google and returns our user record. */
 function verifyUser(idToken) {
-  if (!idToken) throw new Error('Not signed in');
+  if (!idToken) throw authError('Not signed in');
 
   // 1. Ask Google: is this token genuine and not expired?
   const res = UrlFetchApp.fetch(
     'https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(idToken),
     { muteHttpExceptions: true });
-  if (res.getResponseCode() !== 200) throw new Error('Invalid or expired sign-in');
+  if (res.getResponseCode() !== 200) throw authError('Invalid or expired sign-in');
   const claims = JSON.parse(res.getContentText());
 
   // 2. Was it issued for OUR website? (stops tokens from other apps being reused here)
@@ -739,7 +760,10 @@ function webLookup(input, imageBase64) {
     if (!info.found) { info.found = true; mode = 'googlebooks'; }
   }
 
-  info.categories = (info.categories || []).filter(c => BOOK_CATEGORIES.includes(c));
+  // The AI sometimes answers "categories": "Novel" (text) instead of ["Novel"] → normalise
+  if (typeof info.categories === 'string') info.categories = info.categories.split(',');
+  info.categories = (Array.isArray(info.categories) ? info.categories : [])
+    .map(c => String(c).trim()).filter(c => BOOK_CATEGORIES.includes(c));
   info.sources = sources;
   info.mode = mode;
   info.notes = notes;
@@ -750,12 +774,16 @@ function webLookup(input, imageBase64) {
 function parseJsonLoose(text) {
   const citation = /\s*\[\d+(,\s*\d+)*\]/g;          // web answers add [1] or [2, 3] after sentences
   const jsonText = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1);
+  if (!jsonText) throw new Error('The AI did not answer with JSON');
   let obj;
   try { obj = JSON.parse(jsonText); }
   catch (e) {
     try { obj = JSON.parse(jsonText.replace(citation, '')); }
     catch (e2) { throw new Error('Could not understand the AI answer'); }
   }
+  // Sometimes the answer is a LIST [ {...} ] or has extra nesting → take the first object
+  if (Array.isArray(obj)) obj = obj[0];
+  if (!obj || typeof obj !== 'object') throw new Error('Could not understand the AI answer');
   // Remove citation marks inside the text values too
   Object.keys(obj).forEach(k => {
     if (typeof obj[k] === 'string') obj[k] = obj[k].replace(citation, '').trim();
@@ -1009,4 +1037,72 @@ function googleBooksCandidates(input) {
   } catch (err) {
     return [];
   }
+}
+
+
+// =====================================================================
+// Lesson 9: private site + "stay signed in" sessions
+//
+// Google ID tokens expire after about 1 hour. So after checking the Google token ONCE,
+// we create our OWN random session token (valid 30 days) and give it to the browser,
+// which keeps it in a cookie. Every request sends it; we look it up here.
+//   Sessions sheet: tokenHash | email | createdAt | expiresAt
+// We store only a SHA-256 HASH of the token (like a password): someone who can read
+// the Sheet still cannot use the sessions.
+// =====================================================================
+
+const SESSION_DAYS = 30;
+const SESSION_HEADERS = ['tokenHash', 'email', 'createdAt', 'expiresAt'];
+
+function authError(message) {
+  const err = new Error(message);
+  err.code = 'AUTH';
+  return err;
+}
+
+function sha256(text) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text)
+    .map(b => ('0' + (b & 0xff).toString(16)).slice(-2)).join('');   // bytes → hex text
+}
+
+function createSession(email) {
+  const token = Utilities.getUuid() + Utilities.getUuid();   // ~244 random bits → impossible to guess
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + SESSION_DAYS * 24 * 3600 * 1000).toISOString();
+  const sheet = getSheet('Sessions', SESSION_HEADERS);
+  deleteRowsWhere(sheet, r => String(r.expiresAt) < now.toISOString());   // tidy up old sessions
+  upsertRow(sheet, () => false, [sha256(token), email, now.toISOString(), expiresAt]);   // always a new row
+  return { token: token, expiresAt: expiresAt };
+}
+
+/** Session token → the user. Uses CacheService so most requests do not read the Sheet. */
+function userFromSession(token) {
+  if (!token) throw authError('Please sign in');
+  const hash = sha256(token);
+  const cache = CacheService.getScriptCache();
+  let email = cache.get('s_' + hash);
+
+  if (!email) {
+    const row = readRows(getSheet('Sessions', SESSION_HEADERS)).find(r => r.tokenHash === hash);
+    if (!row) throw authError('Your session has ended. Please sign in again.');
+    if (String(row.expiresAt) < new Date().toISOString()) throw authError('Your session expired. Please sign in again.');
+    email = row.email;
+    cache.put('s_' + hash, email, 6 * 3600);            // remember for 6 hours (the maximum)
+  }
+
+  // Read the user fresh from the Users sheet → a role change (admin/user) works immediately
+  const users = readRows(getSheet('Users', ['email', 'name', 'picture', 'role', 'createdAt', 'lastLogin']));
+  const u = users.find(r => r.email === email);
+  if (!u) throw authError('User not found. Please sign in again.');
+  const admins = (PropertiesService.getScriptProperties().getProperty('ADMIN_EMAILS') || '')
+    .split(',').map(x => x.trim().toLowerCase());
+  return { email: u.email, name: u.name, picture: u.picture,
+    role: admins.includes(u.email) ? 'admin' : (u.role || 'user') };
+}
+
+function endSession(token) {
+  if (!token) return;
+  const hash = sha256(token);
+  CacheService.getScriptCache().remove('s_' + hash);
+  deleteRowsWhere(getSheet('Sessions', SESSION_HEADERS), r => r.tokenHash === hash);
 }

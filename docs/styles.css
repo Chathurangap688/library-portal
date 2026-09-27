@@ -275,3 +275,20 @@ dialog h2 { margin-top: 0; }
 /* Lesson 8d */
 #bookForm label.inline-select { flex-direction: row; align-items: center; gap: 6px; color: #676b68; }
 #bookForm label.inline-select select { padding: 6px; }
+
+/* ---------- Lesson 9: login screen ---------- */
+#loginScreen, #startupScreen {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(160deg, #1f4e46, #12302b); padding: 16px; box-sizing: border-box;
+}
+#loginScreen[hidden], #startupScreen[hidden], #app[hidden] { display: none; }
+#startupScreen p { color: white; opacity: .8; }
+.login-card {
+  background: white; border-radius: 16px; padding: 32px 28px; max-width: 380px; width: 100%;
+  text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,.3);
+}
+.login-logo { font-size: 48px; }
+.login-card h1 { margin: 8px 0; color: #1f4e46; }
+.login-card p { color: #676b68; line-height: 1.5; }
+#loginButton { display: flex; justify-content: center; margin: 20px 0 8px; min-height: 44px; }
+#loginStatus { font-size: 0.9rem; min-height: 1.2em; }

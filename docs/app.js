@@ -315,14 +315,8 @@ async function loadBooks() {
 
   count.textContent = 'Loading books…';
   try {
-    let data;
-    if (isAdmin()) {
-      data = await callApi('adminBooks');           // Lesson 6: admins get purchase details too
-    } else {
-      const response = await fetch(API_URL);        // 1. ask the server
-      data = await response.json();                 // 2. read the answer as JSON
-    }
-    if (!data.ok) throw new Error(data.error || 'Server error');
+    // Lesson 9: books are private → ask with our session (admins automatically get purchase info)
+    const data = await callApi('books');
     books = data.books;                           // 3. store the list
     allCategories = data.categories || [];
     buildCategoryFilter();
@@ -337,7 +331,8 @@ async function loadBooks() {
 // ------------------------------------------------------------------
 // Lesson 4: Google Sign-In
 // ------------------------------------------------------------------
-let idToken = null;       // the signed "ID card" Google gives us after sign-in
+let idToken = null;       // the signed "ID card" Google gives us after sign-in (used ONCE, to log in)
+let sessionToken = null;  // Lesson 9: OUR token from the server, kept in a cookie for 30 days
 let currentUser = null;   // { email, name, picture, role } — confirmed by OUR server
 let myData = { status: {}, ratings: {} };   // Lesson 5: my reading status + my ratings
 
@@ -346,7 +341,7 @@ function isAdmin() { return currentUser !== null && currentUser.role === 'admin'
 // Send a POST to Apps Script. Content-Type text/plain keeps it a "simple"
 // request, so the browser does not send an extra CORS "preflight" (Apps Script can't answer those).
 async function callApi(action, params = {}) {
-  const body = Object.assign({ action: action, idToken: idToken }, params);
+  const body = Object.assign({ action: action, sessionToken: sessionToken }, params);
   const response = await fetch(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -365,8 +360,70 @@ async function callApi(action, params = {}) {
     throw new Error('Server problem (' + response.status + '): ' + (message || 'no details') +
       ' — see Apps Script → Executions');
   }
-  if (!data.ok) throw new Error(data.error);
+  if (!data.ok) {
+    // Lesson 9: session missing/expired → back to the login screen
+    if (data.code === 'AUTH' && action !== 'login') {
+      forgetSession();
+      showLoginScreen(data.error);
+    }
+    throw new Error(data.error);
+  }
   return data;
+}
+
+// ------------------------------------------------------------------
+// Lesson 9: the session cookie
+// A cookie is a small "name=value" text the browser keeps for this site and shares
+// between ALL tabs. Max-Age = how many seconds it lives; after that the browser deletes it.
+// ------------------------------------------------------------------
+const COOKIE = 'lp_session';
+
+function saveSessionCookie(token, expiresAt) {
+  const seconds = Math.floor((new Date(expiresAt) - Date.now()) / 1000);
+  const secure = location.protocol === 'https:' ? '; Secure' : '';     // Secure = only over https
+  // SameSite=Strict: the browser never sends it along with requests started by OTHER websites
+  document.cookie = `${COOKIE}=${encodeURIComponent(token)}; Max-Age=${seconds}; Path=/; SameSite=Strict${secure}`;
+}
+
+function readSessionCookie() {
+  // document.cookie looks like "a=1; lp_session=abc; b=2"
+  const found = document.cookie.split('; ').find(c => c.startsWith(COOKIE + '='));
+  return found ? decodeURIComponent(found.slice(COOKIE.length + 1)) : null;
+}
+
+function forgetSession() {
+  sessionToken = null;
+  document.cookie = `${COOKIE}=; Max-Age=0; Path=/; SameSite=Strict`;   // Max-Age=0 → delete now
+}
+
+// Which screen is visible: 'startup' | 'login' | 'app'
+function showScreen(name) {
+  document.getElementById('startupScreen').hidden = name !== 'startup';
+  document.getElementById('loginScreen').hidden = name !== 'login';
+  document.getElementById('app').hidden = name !== 'app';
+}
+
+function showLoginScreen(message) {
+  currentUser = null;
+  myData = { status: {}, ratings: {} };
+  books = [];
+  document.getElementById('grid').innerHTML = '';              // leave nothing behind
+  document.getElementById('recommendRow').innerHTML = '';
+  document.getElementById('recommendSection').hidden = true;
+  document.querySelectorAll('dialog[open]').forEach(d => d.close());
+  document.getElementById('loginStatus').textContent = message || '';
+  showScreen('login');
+  initGoogleSignIn();
+}
+
+// After a successful login OR a still-valid saved session
+async function startApp(data) {
+  currentUser = data.user;
+  myData = data.myData || { status: {}, ratings: {} };
+  showUser();
+  showScreen('app');
+  await loadBooks();
+  loadRecommendations();          // Lesson 8 (no await)
 }
 
 // Only for LEARNING: peek inside a JWT. This does NOT prove it is real —
@@ -381,23 +438,24 @@ async function handleCredential(response) {
   idToken = response.credential;
   console.log('ID token claims (unverified):', decodeJwtPayload(idToken));
 
+  const status = document.getElementById('loginStatus');
+  status.textContent = 'Signing in…';
   try {
-    const data = await callApi('me');       // server verifies + saves the user
-    currentUser = data.user;
-    myData = data.myData;                   // Lesson 5
-    showUser();
-    if (isAdmin()) await loadBooks();       // Lesson 6: reload with admin-only fields
-    applyFilters();                         // redraw cards with my status labels
-    loadRecommendations();                  // Lesson 8 (no await: the page does not wait for it)
+    // Lesson 9: trade the Google ID token (1 hour) for OUR session token (30 days)
+    const data = await callApi('login', { idToken: idToken });
+    idToken = null;                         // not needed any more
+    sessionToken = data.sessionToken;
+    saveSessionCookie(data.sessionToken, data.expiresAt);
+    status.textContent = '';
+    await startApp(data);
   } catch (err) {
     idToken = null;
-    alert('Sign-in failed: ' + err.message);
+    status.textContent = 'Sign-in failed: ' + err.message;
   }
 }
 
 function showUser() {
   const signedIn = currentUser !== null;
-  document.getElementById('signInButton').hidden = signedIn;
   document.getElementById('userBox').hidden = !signedIn;
   if (signedIn) {
     document.getElementById('userPicture').src = currentUser.picture;
@@ -408,18 +466,16 @@ function showUser() {
   document.getElementById('addBookButton').hidden = !isAdmin();
 }
 
-function signOut() {
-  idToken = null;
-  currentUser = null;
-  myData = { status: {}, ratings: {} };
-  google.accounts.id.disableAutoSelect();   // don't auto sign-in again on next visit
-  showUser();
-  applyFilters();
-  document.getElementById('recommendSection').hidden = true;   // Lesson 8
+async function signOut() {
+  try { await callApi('logout'); } catch (e) { /* already ended — fine */ }
+  forgetSession();                          // delete the cookie in THIS browser (all tabs)
+  if (window.google && google.accounts) google.accounts.id.disableAutoSelect();   // no auto sign-in
+  showLoginScreen('You are signed out.');
 }
 
 function initGoogleSignIn() {
   if (!GOOGLE_CLIENT_ID || !API_URL) return;   // not configured yet
+  if (initGoogleSignIn.done) { google.accounts.id.prompt(); return; }   // already set up
 
   // The Google script loads separately — wait until it is ready
   if (!window.google || !google.accounts) {
@@ -432,9 +488,10 @@ function initGoogleSignIn() {
     callback: handleCredential,     // our function above
     auto_select: true               // returning users are signed in automatically
   });
-  google.accounts.id.renderButton(document.getElementById('signInButton'),
-    { theme: 'outline', size: 'medium', shape: 'pill' });
+  google.accounts.id.renderButton(document.getElementById('loginButton'),
+    { theme: 'filled_blue', size: 'large', shape: 'pill', text: 'signin_with' });
   google.accounts.id.prompt();      // shows the "One Tap" popup
+  initGoogleSignIn.done = true;     // functions are objects → we can hang a flag on them
 }
 
 document.getElementById('signOutButton').addEventListener('click', signOut);
@@ -958,7 +1015,15 @@ async function runWebLookup(auto) {
     try { localStorage.setItem('webLanguage', known.answerLanguage); } catch (e) { /* private mode */ }
 
     // Lesson 8e: send the small cover photo too, so the AI can compare it with the web spelling
-    const { info } = await callApi('webLookup', { book: known, imageBase64: photo ? photo.base64 : null });
+    const data = await callApi('webLookup', { book: known, imageBase64: photo ? photo.base64 : null });
+    const info = data.info;
+    // Defensive: never assume the server sent what we expect
+    if (!info || typeof info !== 'object') {
+      console.error('webLookup answer without "info":', data);
+      throw new Error('The server sent no search result. Deploy the latest Code.gs as a New version.');
+    }
+    info.categories = Array.isArray(info.categories) ? info.categories : [];
+    info.sources = Array.isArray(info.sources) ? info.sources : [];
     webInfo = info;
 
     if (!info.found) {
@@ -1106,6 +1171,26 @@ document.getElementById('recommendRow').addEventListener('click', event => {
   if (card) openBook(card.dataset.id);
 });
 
-// First load when the page opens
-loadBooks();
-initGoogleSignIn();
+// ------------------------------------------------------------------
+// Lesson 9: what happens when the page opens (or reloads, or opens in a new tab)
+// ------------------------------------------------------------------
+async function startup() {
+  if (!API_URL) {                          // no backend: sample data, no login
+    showScreen('app');
+    loadBooks();
+    return;
+  }
+  sessionToken = readSessionCookie();
+  if (!sessionToken) { showLoginScreen(); return; }   // never signed in on this browser
+
+  try {
+    const data = await callApi('me');      // is the saved session still valid?
+    await startApp(data);                  // yes → straight in, no login needed
+  } catch (err) {
+    // callApi already showed the login screen for an expired session.
+    // Any other problem (e.g. no internet): show it on the login screen.
+    if (document.getElementById('loginScreen').hidden) showLoginScreen('Could not reach the server: ' + err.message);
+  }
+}
+
+startup();

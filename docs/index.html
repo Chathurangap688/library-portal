@@ -12,11 +12,23 @@
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
+  <!-- Lesson 9: guests only see this. The app below stays hidden until signed in. -->
+  <section id="loginScreen" hidden>
+    <div class="login-card">
+      <div class="login-logo">📚</div>
+      <h1>My Library</h1>
+      <p>Our office book collection. Please sign in with your Google account to continue.</p>
+      <div id="loginButton"></div>
+      <p id="loginStatus"></p>
+    </div>
+  </section>
+
+  <!-- Shown while we check the saved session (so guests never see a flash of the app) -->
+  <div id="startupScreen"><p>Loading…</p></div>
+
+  <div id="app" hidden>
   <header>
     <h1>My Library</h1>
-
-    <!-- Lesson 4: shown when signed OUT — Google draws its button in here -->
-    <div id="signInButton"></div>
 
     <!-- Lesson 4: shown when signed IN -->
     <div id="userBox" hidden>
@@ -65,6 +77,7 @@
     <!-- JavaScript fills this empty box with book cards -->
     <div id="grid"></div>
   </main>
+  </div> <!-- /#app -->
 
   <!-- Lesson 5: book detail popup. Hidden until dialog.showModal() -->
   <dialog id="bookDialog">
