@@ -81,12 +81,20 @@
 
       <!-- Lesson 7: photo → AI. capture="environment" opens the BACK camera on phones -->
       <div class="photo-box">
-        <label class="photo-pick">
-          <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
+        <div class="photo-pick">
           <img id="photoPreview" alt="" hidden>
-          <span id="photoHint">📷 Take or choose a cover photo</span>
-        </label>
+          <span id="photoHint">No photo yet</span>
+        </div>
         <div class="photo-actions">
+          <!-- Two inputs: capture="environment" = open the camera; without it = photo gallery / files -->
+          <div class="pick-buttons">
+            <label class="pick-btn">📷 Camera
+              <input id="cameraInput" type="file" accept="image/*" capture="environment" hidden>
+            </label>
+            <label class="pick-btn">🖼️ Gallery
+              <input id="galleryInput" type="file" accept="image/*" hidden>
+            </label>
+          </div>
           <button type="button" id="analyzeButton" disabled>✨ Read cover with AI</button>
           <p id="aiStatus"></p>
         </div>
@@ -130,6 +138,8 @@
         <button type="button" id="webButton">🔎 Find more on the web</button>
         <span id="webStatus"></span>
       </div>
+      <!-- Results appear here: tick what you want, then Apply (works when adding AND editing) -->
+      <div id="webResults" hidden></div>
       <label>Description<textarea name="description" rows="3"></textarea></label>
       <label>What readers say<textarea name="reviewSummary" rows="2"></textarea></label>
       <input type="hidden" name="webSources">

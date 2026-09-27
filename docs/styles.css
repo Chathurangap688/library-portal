@@ -251,3 +251,23 @@ dialog h2 { margin-top: 0; }
 }
 .rec-row .book { scroll-snap-align: start; }
 .reason { font-size: 0.75rem; color: #1f4e46; font-weight: bold; margin: 4px 0 0; }
+
+/* ---------- Lesson 8b: camera/gallery + web results ---------- */
+.photo-pick { cursor: default; }
+.pick-buttons { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+#bookForm label.pick-btn {
+  flex-direction: row; display: inline-flex; align-items: center; cursor: pointer;
+  border: 1px solid #ddd6c8; background: white; color: #1d1f1e; font-size: 0.9rem;
+  border-radius: 8px; padding: 8px 12px;
+}
+#bookForm label.pick-btn:active { background: #f6f3ec; }
+
+#webResults { border: 1px solid #c98a12; border-radius: 10px; padding: 10px; background: #fffbef;
+  display: flex; flex-direction: column; gap: 8px; }
+#webResults[hidden] { display: none; }
+#bookForm label.web-row { flex-direction: row; align-items: flex-start; gap: 8px; color: #1d1f1e; font-size: 0.9rem; }
+.web-row input { margin-top: 3px; }
+.web-row small { color: #a3312a; }
+.web-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.web-actions button { border: 1px solid #ddd6c8; background: white; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+#applyWeb { background: #1f4e46; color: white; border-color: #1f4e46; }

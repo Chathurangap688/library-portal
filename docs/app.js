@@ -585,6 +585,7 @@ function openEditor(bookId) {
   }
   showTranslationFields();
   document.getElementById('webStatus').textContent = '';
+  document.getElementById('webResults').hidden = true;
   resetPhoto(book ? book.coverUrl : '');     // Lesson 7
   editDialog.showModal();
   form.elements.title.focus();
@@ -659,7 +660,8 @@ function resetPhoto(existingCoverUrl) {
   photo = null;
   originalImage = null;
   cleanCover = null;
-  document.getElementById('photoInput').value = '';
+  document.getElementById('cameraInput').value = '';
+  document.getElementById('galleryInput').value = '';
   const preview = document.getElementById('photoPreview');
   preview.hidden = !existingCoverUrl;
   preview.src = existingCoverUrl || '';
@@ -688,7 +690,8 @@ function shrinkImage(file, maxSize) {
   });
 }
 
-document.getElementById('photoInput').addEventListener('change', async event => {
+// Camera and Gallery both end up here
+async function onPhotoPicked(event) {
   const file = event.target.files[0];
   if (!file) return;
   try {
@@ -706,7 +709,9 @@ document.getElementById('photoInput').addEventListener('change', async event => 
   } catch (err) {
     alert(err.message);
   }
-});
+}
+document.getElementById('cameraInput').addEventListener('change', onPhotoPicked);
+document.getElementById('galleryInput').addEventListener('change', onPhotoPicked);
 
 // Load a File into an <img> element (full size) and wait until it is ready
 function loadImage(file) {
@@ -897,52 +902,113 @@ document.getElementById('addCategory').addEventListener('click', () => {
   input.value = '';
 });
 
-// Ask the server to search the web for this book, then fill EMPTY fields only
+// Ask the server to look the book up, then SHOW the results so the admin can choose what to use
+let webInfo = null;
+
+// Which result fields go into which form field, and their labels
+const WEB_FIELDS = [
+  ['description', 'Description'], ['reviewSummary', 'What readers say'],
+  ['translator', 'Translator'], ['originalTitle', 'Original title'], ['originalAuthor', 'Original author'],
+  ['publisher', 'Publisher'], ['year', 'Year']
+];
+
 document.getElementById('webButton').addEventListener('click', async () => {
   const f = form.elements;
   const status = document.getElementById('webStatus');
   const button = document.getElementById('webButton');
+  const box = document.getElementById('webResults');
   if (!f.title.value.trim()) { status.textContent = 'Enter the title first'; return; }
 
   button.disabled = true;
-  status.textContent = 'Searching the web… (10–30 seconds)';
+  box.hidden = true;
+  status.textContent = 'Searching… (10–40 seconds)';
   try {
     const known = {};
     ['title', 'author', 'titleSinglish', 'authorSinglish', 'translator', 'language', 'isbn', 'publisher']
       .forEach(k => { known[k] = f[k].value; });
+    known.isTranslation = f.isTranslation.checked;     // tells the AI which edition we have
     const { info } = await callApi('webLookup', { book: known });   // "destructuring": take data.info
+    webInfo = info;
 
     if (!info.found) {
-      status.textContent = 'Could not find this book on the web with confidence.';
+      status.textContent = 'Nothing found for this book. ' + (info.notes || []).join(' ');
       return;
     }
-    // Fill only what the admin has not typed yet — never overwrite their work
-    const fillEmpty = (name, value) => {
-      if (value && !f[name].value.trim()) {
-        f[name].value = value;
-        f[name].classList.remove('ai-filled'); void f[name].offsetWidth; f[name].classList.add('ai-filled');
-      }
-    };
-    fillEmpty('description', info.description);
-    fillEmpty('reviewSummary', info.reviewSummary);
-    fillEmpty('publisher', info.publisher);
-    fillEmpty('year', String(info.year || ''));
-    if (info.translator || info.originalTitle) {
-      f.isTranslation.checked = true;
-      showTranslationFields();
-    }
-    fillEmpty('translator', info.translator);
-    fillEmpty('originalTitle', info.originalTitle);
-    fillEmpty('originalAuthor', info.originalAuthor);
-    if (info.categories.length && !selectedCategories().length) renderCategoryChips(info.categories);
-    f.webSources.value = JSON.stringify(info.sources || []);
-    status.textContent = `Found! ${info.sources.length} source(s). Please check before saving.`;
+    const from = { web: 'the web', ai: 'AI knowledge (not a web search — double-check!)', googlebooks: 'Google Books' }[info.mode];
+    status.textContent = 'Found via ' + from + '.';
+    showWebResults(info);
   } catch (err) {
-    status.textContent = err.message;
+    status.textContent = 'Error: ' + err.message;
   } finally {
     button.disabled = false;
   }
 });
+
+// One row per found value. Ticked by default only when that form field is EMPTY,
+// so while editing you never overwrite something by accident — but you can choose to.
+function showWebResults(info) {
+  const f = form.elements;
+  const rows = WEB_FIELDS
+    .filter(([key]) => info[key] && String(info[key]).trim())
+    .map(([key, label]) => {
+      const current = f[key].value.trim();
+      const same = current === String(info[key]).trim();
+      if (same) return '';
+      // Pre-tick only empty fields — and nothing at all when it came from AI memory (less reliable)
+      const tick = !current && info.mode !== 'ai';
+      return `
+        <label class="web-row">
+          <input type="checkbox" data-key="${key}" ${tick ? 'checked' : ''}>
+          <span><b>${label}</b>${current ? ' <small>(replaces current)</small>' : ''}<br>${escapeHtml(info[key])}</span>
+        </label>`;
+    }).join('');
+
+  const cats = (info.categories || []).filter(c => !selectedCategories().includes(c));
+  const catRow = cats.length ? `
+    <label class="web-row">
+      <input type="checkbox" data-key="categories" checked>
+      <span><b>Add categories</b><br>${escapeHtml(cats.join(', '))}</span>
+    </label>` : '';
+
+  const box = document.getElementById('webResults');
+  if (!rows && !catRow) {
+    box.hidden = true;
+    document.getElementById('webStatus').textContent += ' Nothing new — the form already has this.';
+    return;
+  }
+  box.innerHTML = rows + catRow + `
+    ${sourcesHtml(JSON.stringify(info.sources || []))}
+    <div class="web-actions">
+      <button type="button" id="applyWeb">Apply selected</button>
+      <button type="button" id="closeWeb">Dismiss</button>
+    </div>`;
+  box.hidden = false;
+}
+
+document.getElementById('webResults').addEventListener('click', event => {
+  const box = document.getElementById('webResults');
+  if (event.target.id === 'closeWeb') { box.hidden = true; return; }
+  if (event.target.id !== 'applyWeb') return;
+
+  const f = form.elements;
+  box.querySelectorAll('input:checked').forEach(cb => {
+    const key = cb.dataset.key;
+    if (key === 'categories') {
+      renderCategoryChips([...selectedCategories(), ...webInfo.categories]);
+      return;
+    }
+    f[key].value = webInfo[key];
+    f[key].classList.remove('ai-filled'); void f[key].offsetWidth; f[key].classList.add('ai-filled');
+    if (['translator', 'originalTitle', 'originalAuthor'].includes(key)) {
+      f.isTranslation.checked = true;       // translation info found → it IS a translation
+      showTranslationFields();
+    }
+  });
+  if ((webInfo.sources || []).length) f.webSources.value = JSON.stringify(webInfo.sources);
+  box.hidden = true;
+  document.getElementById('webStatus').textContent = 'Applied. Check the fields, then Save.';
+});
+
 
 // ------------------------------------------------------------------
 // Lesson 8: "Recommended for you" row

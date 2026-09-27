@@ -539,7 +539,11 @@ function geminiRequest(body) {
   if (code !== 200) console.error('Gemini ' + code + ': ' + res.getContentText().slice(0, 500));
   if (code === 429) throw new Error('AI free limit reached for today. Try again later, or type the details.');
   if (code === 503 || code === 500) throw new Error('The AI is very busy right now. Wait a minute and tap "Read cover" again.');
-  if (code === 400 || code === 403) throw new Error('The AI rejected the request (check GEMINI_API_KEY).');
+  if (code === 400 || code === 403) {
+    let reason = '';
+    try { reason = JSON.parse(res.getContentText()).error.message; } catch (e) { /* not JSON */ }
+    throw new Error('The AI rejected the request: ' + (reason || 'check GEMINI_API_KEY').slice(0, 200));
+  }
   if (code !== 200) throw new Error('AI error ' + code + '. See Executions log in Apps Script.');
 
   return JSON.parse(res.getContentText());
@@ -613,51 +617,134 @@ const BOOK_CATEGORIES = [
 ];
 
 /**
- * Ask Gemini to SEARCH THE WEB (Google Search grounding) for the book and summarise.
+ * Lesson 7d + 8b: find extra information about a book. Tries 3 sources, best first:
+ *   1. Gemini + Google Search ("grounding")  → mode 'web'
+ *   2. Gemini's own knowledge (no search)    → mode 'ai'   (if 1 fails or finds nothing)
+ *   3. Google Books API                       → fills any gaps (free, very reliable for ISBN books)
  * input = what we already know: { title, author, titleSinglish, authorSinglish, translator, language, isbn }
  */
 function webLookup(input) {
-  if (!input || !input.title) throw new Error('Enter at least a title first');
+  if (!input || !String(input.title || '').trim()) throw new Error('Enter at least a title first');
   const known = ['title', 'author', 'titleSinglish', 'authorSinglish', 'translator', 'language', 'isbn', 'publisher']
     .filter(k => input[k]).map(k => k + ': ' + String(input[k]).slice(0, 200)).join('\n');
+  const translationHint = input.isTranslation
+    ? 'Our copy IS a translation into ' + (input.language || 'another language') + '.'
+    : 'Our copy is NOT marked as a translation: it is probably the original ' + (input.language || '') +
+      ' edition. Then leave translator, originalTitle, originalAuthor and originalLanguage EMPTY ' +
+      '(do not describe some other translated edition).';
 
   const prompt = [
-    'Search the web for this book and tell me about it.',
+    'Find information about this book.',
+    translationHint,
     known,
     '',
-    'Answer with ONLY a JSON object (no other text) with these keys:',
-    '  found: true only if you are confident you found THIS book (same title and author)',
+    'Answer with ONLY a JSON object (no other text, no citation marks) with these keys:',
+    '  found: true only if you are confident it is THIS book (same title and author)',
     '  description: 2-4 neutral sentences in English about what the book is about',
-    '  reviewSummary: 1-2 sentences on what readers or critics say about it (empty if nothing found)',
-    '  originalTitle, originalAuthor, originalLanguage: if it is a translation',
+    '  reviewSummary: 1-2 sentences on what readers or critics say (empty if unknown)',
+    '  originalTitle, originalAuthor, originalLanguage: only if it is a translation',
     '  translator, publisher, year, pageCount',
     '  categories: 1-3 items ONLY from: ' + BOOK_CATEGORIES.join(', '),
-    'Use empty strings for anything you did not find. Never invent facts.'
+    'Use empty strings for anything you do not know. Never invent facts.'
   ].join('\n');
 
-  const body = {
-    contents: [{ parts: [{ text: prompt }] }],
-    tools: [{ google_search: {} }],          // ← lets Gemini run Google searches before answering
-    generationConfig: { temperature: 0.2 }
-    // Note: no responseSchema here — structured output and the search tool do not mix on every model,
-    // so we ask for JSON in words and cut it out of the text below.
-  };
-  const answer = geminiRequest(body);
-  const text = answerText(answer);
+  let info = null, mode = 'none', sources = [];
+  const notes = [];
 
-  // Take the part between the first "{" and the last "}" (models sometimes add ```json … ```)
-  const jsonText = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1);
-  let info;
-  try { info = JSON.parse(jsonText); } catch (e) { throw new Error('Could not understand the web answer. Try again.'); }
+  // ---- 1. with Google Search ----
+  try {
+    const answer = geminiRequest({
+      contents: [{ parts: [{ text: 'Search the web first. ' + prompt }] }],
+      tools: [{ google_search: {} }],       // ← lets Gemini run Google searches before answering
+      generationConfig: { temperature: 0.2 }
+      // no responseSchema: structured output + search tool do not mix on every model
+    });
+    info = parseJsonLoose(answerText(answer));
+    const chunks = (answer.candidates[0].groundingMetadata || {}).groundingChunks || [];
+    sources = chunks.filter(c => c.web && c.web.uri).slice(0, 5)
+      .map(c => ({ title: c.web.title || c.web.uri, url: c.web.uri }));
+    mode = 'web';
+  } catch (err) {
+    console.warn('Web search failed: ' + err.message);
+    notes.push('Web search unavailable (' + err.message + ')');
+  }
 
-  // Which web pages did it use? (grounding metadata) → keep up to 5 as "sources"
-  const chunks = (answer.candidates[0].groundingMetadata || {}).groundingChunks || [];
-  info.sources = chunks.filter(c => c.web && c.web.uri).slice(0, 5)
-    .map(c => ({ title: c.web.title || c.web.uri, url: c.web.uri }));
+  // ---- 2. no search: the model's own knowledge ----
+  if (!info || !info.found) {
+    try {
+      const answer = geminiRequest({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.2, responseMimeType: 'application/json' }
+      });
+      const fromAi = parseJsonLoose(answerText(answer));
+      if (fromAi.found) { info = fromAi; mode = 'ai'; sources = []; }
+    } catch (err) {
+      console.warn('AI knowledge lookup failed: ' + err.message);
+      notes.push('AI unavailable (' + err.message + ')');
+    }
+  }
 
-  // Keep only categories from our list
+  info = info && info.found ? info : { found: false };
+
+  // ---- 3. Google Books fills the gaps ----
+  const gb = googleBooksDetails(input.isbn, input.title, input.author || input.authorSinglish);
+  if (gb) {
+    ['description', 'publisher', 'year', 'pageCount'].forEach(k => { if (!info[k]) info[k] = gb[k]; });
+    if (gb.link) sources.push({ title: 'Google Books', url: gb.link });
+    if (!info.found) { info.found = true; mode = 'googlebooks'; }
+  }
+
   info.categories = (info.categories || []).filter(c => BOOK_CATEGORIES.includes(c));
+  info.sources = sources;
+  info.mode = mode;
+  info.notes = notes;
   return info;
+}
+
+/** JSON.parse that survives ```json fences, extra text and [1]-style citation marks. */
+function parseJsonLoose(text) {
+  const citation = /\s*\[\d+(,\s*\d+)*\]/g;          // web answers add [1] or [2, 3] after sentences
+  const jsonText = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1);
+  let obj;
+  try { obj = JSON.parse(jsonText); }
+  catch (e) {
+    try { obj = JSON.parse(jsonText.replace(citation, '')); }
+    catch (e2) { throw new Error('Could not understand the AI answer'); }
+  }
+  // Remove citation marks inside the text values too
+  Object.keys(obj).forEach(k => {
+    if (typeof obj[k] === 'string') obj[k] = obj[k].replace(citation, '').trim();
+  });
+  return obj;
+}
+
+/** Google Books: description + details + a link. null if not found. */
+function googleBooksDetails(isbn, title, author) {
+  isbn = String(isbn || '').replace(/[^0-9Xx]/g, '');
+  const q = isbn ? 'isbn:' + isbn : (title ? 'intitle:' + title + (author ? ' inauthor:' + author : '') : '');
+  if (!q) return null;
+  try {
+    const res = UrlFetchApp.fetch('https://www.googleapis.com/books/v1/volumes?maxResults=1&q=' +
+      encodeURIComponent(q), { muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return null;
+    const item = (JSON.parse(res.getContentText()).items || [])[0];
+    if (!item) return null;
+    const v = item.volumeInfo;
+    return {
+      description: String(v.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1200),
+      publisher: v.publisher || '',
+      year: String(v.publishedDate || '').slice(0, 4),
+      pageCount: v.pageCount ? String(v.pageCount) : '',
+      link: String(v.infoLink || '').replace('http://', 'https://')
+    };
+  } catch (err) {
+    return null;
+  }
+}
+
+/** Run from the editor to test the web lookup and read the result in the log. */
+function testWebLookup() {
+  Logger.log(JSON.stringify(webLookup({ title: 'Madol Doova', author: 'Martin Wickramasinghe' }), null, 2));
 }
 
 
