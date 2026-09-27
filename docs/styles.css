@@ -341,3 +341,20 @@ dialog h2 { margin-top: 0; }
 #dupWarning .link { background: none; border: none; color: #1f4e46; text-decoration: underline; cursor: pointer;
   text-align: left; padding: 0; font: inherit; font-size: 0.85rem; }
 #bookForm label.copies { max-width: 120px; }
+
+/* ---------- Lesson 12: auto-save ---------- */
+#autoSaveBar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+  background: #dfeae6; border: 1px solid #1f4e46; border-radius: 10px; padding: 10px 12px; }
+#autoSaveBar[hidden] { display: none; }
+#autoSaveText { font-weight: bold; color: #1f4e46; }
+#autoSaveCancel { border: 1px solid #1f4e46; background: white; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+.form-buttons { flex-wrap: wrap; align-items: center; }
+#bookForm label.auto-save-option { flex-direction: row; align-items: center; gap: 6px; margin-right: auto; font-size: 0.85rem; }
+#toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); opacity: 0;
+  background: #1d1f1e; color: white; padding: 10px 16px; border-radius: 10px; transition: .25s; z-index: 100;
+  pointer-events: none; max-width: calc(100vw - 32px); }
+#toast.show { opacity: 1; transform: translateX(-50%); pointer-events: auto; }
+#toast button { margin-left: 10px; background: white; color: #1d1f1e; border: none; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+/* Keep the countdown visible while the form scrolls: "sticky" = normal until it would
+   scroll away, then it sticks to the bottom edge of the popup */
+#autoSaveBar { position: sticky; bottom: 0; z-index: 5; box-shadow: 0 -4px 12px rgba(0,0,0,.08); }

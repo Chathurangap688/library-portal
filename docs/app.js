@@ -765,6 +765,7 @@ function openEditor(bookId) {
   document.getElementById('webStatus').textContent = '';
   document.getElementById('webResults').hidden = true;
   hideDuplicates();                                // Lesson 11
+  cancelAutoSave();                                // Lesson 12
   if (!form.elements.copies.value) form.elements.copies.value = 1;
   resetPhoto(book ? book.coverUrl : '');     // Lesson 7
   editDialog.showModal();
@@ -807,13 +808,19 @@ form.addEventListener('submit', async event => {
     const data = await callApi('saveBook', { book: book, imageBase64: cleanCover ? cleanCover.base64 : null });
     editDialog.close();
     await loadBooks();
-    openBook(data.book.id);                 // show the saved book
+    if (savingAutomatically) {
+      showToast(`✅ Saved "${data.book.title}"`, data.book.id);   // Lesson 12: no popup, just a note
+    } else {
+      openBook(data.book.id);               // show the saved book
+    }
   } catch (err) {
+    savingAutomatically = false;
     if (err.code === 'DUPLICATE') showDuplicates(err.details || []);   // the server caught a duplicate
     else alert('Could not save: ' + err.message);
   } finally {
     saveButton.disabled = false;
     saveButton.textContent = 'Save';
+    savingAutomatically = false;
   }
 });
 
@@ -993,9 +1000,8 @@ document.getElementById('analyzeButton').addEventListener('click', async () => {
     const pct = Math.round((data.draft.confidence || 0) * 100);
     status.textContent = `Filled by AI (confidence ${pct}%). Please check before saving.`;
 
-    // Lesson 8e: straight away check the web — adds details AND fixes a mis-read title
-    runWebLookup(true);          // no await: the admin can already look at the form
-    checkDuplicatesNow();        // Lesson 11: is this book already in the library?
+    // Lesson 8e + 11 + 12: web check → duplicate check → (maybe) save by itself
+    autoFlow(data.draft.confidence || 0);   // no await: the admin can already look at the form
   } catch (err) {
     status.textContent = err.message;
   } finally {
@@ -1323,7 +1329,11 @@ async function checkDuplicatesNow() {
     ['title', 'author', 'titleSinglish', 'authorSinglish', 'isbn'].forEach(k => { book[k] = f[k].value; });
     const { duplicates } = await callApi('checkDuplicates', { book: book });
     if (duplicates.length) showDuplicates(duplicates); else hideDuplicates();
-  } catch (err) { console.warn('Duplicate check failed:', err); }   // never block adding a book
+    return duplicates.length > 0;
+  } catch (err) {
+    console.warn('Duplicate check failed:', err);   // never block adding a book
+    return false;
+  }
 }
 
 function showDuplicates(list) {
@@ -1381,5 +1391,94 @@ document.getElementById('dupWarning').addEventListener('click', async event => {
     button.disabled = false;
   }
 });
+
+// ------------------------------------------------------------------
+// Lesson 12: save automatically after the AI + web checks
+// Only when it is SAFE: a NEW book, a title, no duplicate warning, and the AI was fairly sure.
+// A 5-second countdown gives the admin a last chance to stop it.
+// ------------------------------------------------------------------
+let savingAutomatically = false;
+let autoSaveTimer = null;
+
+// Remember the checkbox on this device
+try {
+  const saved = localStorage.getItem('autoSave');
+  if (saved !== null) document.getElementById('autoSaveToggle').checked = saved === 'yes';
+} catch (e) { /* ignore */ }
+document.getElementById('autoSaveToggle').addEventListener('change', event => {
+  try { localStorage.setItem('autoSave', event.target.checked ? 'yes' : 'no'); } catch (e) { /* ignore */ }
+  if (!event.target.checked) cancelAutoSave();
+});
+
+async function autoFlow(confidence) {
+  const f = form.elements;
+  await runWebLookup(true);                       // 1. details + title correction (waits until done)
+  const isDuplicate = await checkDuplicatesNow(); // 2. already in the library?
+
+  // 3. decide
+  const status = document.getElementById('webStatus');
+  if (!editDialog.open || f.id.value) return;                       // closed, or editing an old book
+  if (!document.getElementById('autoSaveToggle').checked) return;   // admin switched it off
+  if (isDuplicate) { status.textContent += ' Not saved automatically: please choose above.'; return; }
+  if (!f.title.value.trim()) return;
+  if (confidence < 0.6) {
+    status.textContent += ` Not saved automatically: the AI was only ${Math.round(confidence * 100)}% sure — please check.`;
+    return;
+  }
+  startAutoSaveCountdown(5);
+}
+
+function startAutoSaveCountdown(seconds) {
+  cancelAutoSave();
+  const bar = document.getElementById('autoSaveBar');
+  const text = document.getElementById('autoSaveText');
+  let left = seconds;
+  bar.hidden = false;
+  text.textContent = `💾 Saving automatically in ${left}…`;
+  // setInterval runs the function every 1000 ms until clearInterval stops it
+  autoSaveTimer = setInterval(() => {
+    left--;
+    if (left > 0) { text.textContent = `💾 Saving automatically in ${left}…`; return; }
+    cancelAutoSave();
+    savingAutomatically = true;
+    form.requestSubmit();          // = pressing Save: runs the same submit handler, incl. `required` checks
+  }, 1000);
+}
+
+function cancelAutoSave() {
+  if (autoSaveTimer) clearInterval(autoSaveTimer);
+  autoSaveTimer = null;
+  document.getElementById('autoSaveBar').hidden = true;
+}
+
+document.getElementById('autoSaveCancel').addEventListener('click', () => {
+  cancelAutoSave();
+  document.getElementById('webStatus').textContent = 'Auto-save cancelled. Check the fields, then click Save.';
+});
+// Typing in the form means the admin is changing something → stop the countdown
+form.addEventListener('input', cancelAutoSave);
+editDialog.addEventListener('close', cancelAutoSave);
+
+// A small message at the bottom of the screen that disappears by itself
+function showToast(message, bookId) {
+  let toast = document.getElementById('toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'toast';
+    document.body.appendChild(toast);
+  }
+  toast.innerHTML = '';
+  toast.append(message);                                   // append(text) = safe, like textContent
+  if (bookId) {
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.textContent = 'Open';
+    open.onclick = () => { toast.classList.remove('show'); openBook(bookId); };
+    toast.append(' ', open);
+  }
+  toast.classList.add('show');
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => toast.classList.remove('show'), 6000);
+}
 
 startup();

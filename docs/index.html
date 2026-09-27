@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>My Library</title>
   <!-- ?v=… = "cache busting": change the number on every release so browsers fetch the NEW files -->
-  <link rel="stylesheet" href="styles.css?v=2026092803">
+  <link rel="stylesheet" href="styles.css?v=2026092804">
   <!-- defer = download now, but run only after the whole page is built -->
-  <script src="config.js?v=2026092803" defer></script>
-  <script src="app.js?v=2026092803" defer></script>
+  <script src="config.js?v=2026092804" defer></script>
+  <script src="app.js?v=2026092804" defer></script>
   <!-- Lesson 4: Google's sign-in library -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -211,7 +211,14 @@
         <label>Notes<textarea name="notes" rows="2"></textarea></label>
       </fieldset>
 
+      <!-- Lesson 12: auto-save countdown (shown only while counting down) -->
+      <div id="autoSaveBar" hidden>
+        <span id="autoSaveText"></span>
+        <button type="button" id="autoSaveCancel">Cancel — I want to check first</button>
+      </div>
+
       <div class="form-buttons">
+        <label class="auto-save-option"><input type="checkbox" id="autoSaveToggle" checked> Save automatically after the AI checks</label>
         <button type="button" id="cancelEdit">Cancel</button>
         <button type="submit" id="saveBook">Save</button>
       </div>
