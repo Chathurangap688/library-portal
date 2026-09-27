@@ -271,3 +271,7 @@ dialog h2 { margin-top: 0; }
 .web-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .web-actions button { border: 1px solid #ddd6c8; background: white; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
 #applyWeb { background: #1f4e46; color: white; border-color: #1f4e46; }
+
+/* Lesson 8d */
+#bookForm label.inline-select { flex-direction: row; align-items: center; gap: 6px; color: #676b68; }
+#bookForm label.inline-select select { padding: 6px; }

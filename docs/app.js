@@ -809,6 +809,9 @@ document.getElementById('analyzeButton').addEventListener('click', async () => {
     document.getElementById('photoPreview').src = 'data:image/jpeg;base64,' + cleanCover.base64;
     const pct = Math.round((data.draft.confidence || 0) * 100);
     status.textContent = `Filled by AI (confidence ${pct}%). Please check before saving.`;
+
+    // Lesson 8e: straight away check the web — adds details AND fixes a mis-read title
+    runWebLookup(true);          // no await: the admin can already look at the form
   } catch (err) {
     status.textContent = err.message;
   } finally {
@@ -907,12 +910,24 @@ let webInfo = null;
 
 // Which result fields go into which form field, and their labels
 const WEB_FIELDS = [
+  ['title', '✏️ Title (corrected)'], ['author', '✏️ Author (corrected)'],
+  ['titleSinglish', '✏️ Title in English letters'], ['authorSinglish', '✏️ Author in English letters'],
   ['description', 'Description'], ['reviewSummary', 'What readers say'],
   ['translator', 'Translator'], ['originalTitle', 'Original title'], ['originalAuthor', 'Original author'],
   ['publisher', 'Publisher'], ['year', 'Year']
 ];
 
-document.getElementById('webButton').addEventListener('click', async () => {
+// Remember the last chosen language on this device (localStorage = small key/value store in the browser)
+try {
+  const saved = localStorage.getItem('webLanguage');
+  if (saved) document.getElementById('webLanguage').value = saved;
+} catch (e) { /* storage blocked → keep the default */ }
+
+/**
+ * Look the book up on the web. Used by the button AND automatically after "Read cover".
+ *   auto = true → apply the safe (pre-ticked) results straight away, show the rest for review
+ */
+async function runWebLookup(auto) {
   const f = form.elements;
   const status = document.getElementById('webStatus');
   const button = document.getElementById('webButton');
@@ -921,28 +936,43 @@ document.getElementById('webButton').addEventListener('click', async () => {
 
   button.disabled = true;
   box.hidden = true;
-  status.textContent = 'Searching… (10–40 seconds)';
+  status.textContent = (auto ? 'Checking the web automatically… ' : 'Searching… ') + '(10–40 seconds)';
   try {
     const known = {};
     ['title', 'author', 'titleSinglish', 'authorSinglish', 'translator', 'language', 'isbn', 'publisher']
       .forEach(k => { known[k] = f[k].value; });
     known.isTranslation = f.isTranslation.checked;     // tells the AI which edition we have
-    const { info } = await callApi('webLookup', { book: known });   // "destructuring": take data.info
+    known.answerLanguage = document.getElementById('webLanguage').value;   // Lesson 8d
+    try { localStorage.setItem('webLanguage', known.answerLanguage); } catch (e) { /* private mode */ }
+
+    // Lesson 8e: send the small cover photo too, so the AI can compare it with the web spelling
+    const { info } = await callApi('webLookup', { book: known, imageBase64: photo ? photo.base64 : null });
     webInfo = info;
 
     if (!info.found) {
-      status.textContent = 'Nothing found for this book. ' + (info.notes || []).join(' ');
+      status.textContent = 'Nothing found on the web for this book. ' + (info.notes || []).join(' ');
       return;
     }
+    // Corrections from the server have their own names → copy them onto the normal field names
+    ['Title', 'Author', 'TitleSinglish', 'AuthorSinglish'].forEach(k => {
+      const value = info['corrected' + k];
+      const field = k.charAt(0).toLowerCase() + k.slice(1);            // "TitleSinglish" → "titleSinglish"
+      if (value && value.trim() && value.trim() !== f[field].value.trim()) info[field] = value.trim();
+    });
+
     const from = { web: 'the web', ai: 'AI knowledge (not a web search — double-check!)', googlebooks: 'Google Books' }[info.mode];
     status.textContent = 'Found via ' + from + '.';
     showWebResults(info);
+    if (auto && !box.hidden) applyWebResults(true);   // auto: apply the ticked rows right away
   } catch (err) {
     status.textContent = 'Error: ' + err.message;
   } finally {
     button.disabled = false;
   }
-});
+}
+
+document.getElementById('webButton').addEventListener('click', () => runWebLookup(false));
+
 
 // One row per found value. Ticked by default only when that form field is EMPTY,
 // so while editing you never overwrite something by accident — but you can choose to.
@@ -955,11 +985,14 @@ function showWebResults(info) {
       const same = current === String(info[key]).trim();
       if (same) return '';
       // Pre-tick only empty fields — and nothing at all when it came from AI memory (less reliable)
-      const tick = !current && info.mode !== 'ai';
+      const isCorrection = ['title', 'author', 'titleSinglish', 'authorSinglish'].includes(key);
+      const tick = info.mode !== 'ai' && (!current || (isCorrection && info.mode === 'web'));
+      const note = isCorrection && current ? ` <small>(was: ${escapeHtml(current)})</small>`
+        : current ? ' <small>(replaces current)</small>' : '';
       return `
         <label class="web-row">
           <input type="checkbox" data-key="${key}" ${tick ? 'checked' : ''}>
-          <span><b>${label}</b>${current ? ' <small>(replaces current)</small>' : ''}<br>${escapeHtml(info[key])}</span>
+          <span><b>${label}</b>${note}<br>${escapeHtml(info[key])}</span>
         </label>`;
     }).join('');
 
@@ -986,28 +1019,45 @@ function showWebResults(info) {
 }
 
 document.getElementById('webResults').addEventListener('click', event => {
-  const box = document.getElementById('webResults');
-  if (event.target.id === 'closeWeb') { box.hidden = true; return; }
-  if (event.target.id !== 'applyWeb') return;
+  if (event.target.id === 'closeWeb') { document.getElementById('webResults').hidden = true; return; }
+  if (event.target.id === 'applyWeb') applyWebResults(false);
+});
 
+// Copy the TICKED rows into the form. auto = called without a click (after reading the cover).
+function applyWebResults(auto) {
+  const box = document.getElementById('webResults');
   const f = form.elements;
+  const applied = [];
+  const oldTitle = f.title.value;                     // remember, to show "old → new"
   box.querySelectorAll('input:checked').forEach(cb => {
     const key = cb.dataset.key;
+    cb.closest('.web-row').remove();                  // applied → remove its row
     if (key === 'categories') {
       renderCategoryChips([...selectedCategories(), ...webInfo.categories]);
+      applied.push('categories');
       return;
     }
     f[key].value = webInfo[key];
     f[key].classList.remove('ai-filled'); void f[key].offsetWidth; f[key].classList.add('ai-filled');
+    applied.push(key);
     if (['translator', 'originalTitle', 'originalAuthor'].includes(key)) {
       f.isTranslation.checked = true;       // translation info found → it IS a translation
       showTranslationFields();
     }
   });
   if ((webInfo.sources || []).length) f.webSources.value = JSON.stringify(webInfo.sources);
-  box.hidden = true;
-  document.getElementById('webStatus').textContent = 'Applied. Check the fields, then Save.';
-});
+
+  // Keep the box open only if there are unticked rows left for the admin to decide
+  const left = box.querySelectorAll('.web-row').length;
+  box.hidden = left === 0;
+  const status = document.getElementById('webStatus');
+  if (applied.includes('title')) status.textContent = `✏️ Title corrected: "${oldTitle}" → "${f.title.value}". `;
+  else status.textContent = '';
+  status.textContent += applied.length
+    ? `${auto ? 'Auto-filled' : 'Applied'}: ${applied.length} field(s).` + (left ? ' More suggestions below.' : '') + ' Check, then Save.'
+    : 'Nothing applied automatically — see the suggestions below.';
+}
+
 
 
 // ------------------------------------------------------------------

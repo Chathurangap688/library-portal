@@ -107,7 +107,7 @@ function doPost(e) {
     }
     if (request.action === 'webLookup') {             // Lesson 7d
       requireAdmin(user);
-      return jsonResponse({ ok: true, info: webLookup(request.book) });
+      return jsonResponse({ ok: true, info: webLookup(request.book, request.imageBase64) });
     }
     if (request.action === 'analyzeCover') {          // Lesson 7
       requireAdmin(user);
@@ -623,8 +623,17 @@ const BOOK_CATEGORIES = [
  *   3. Google Books API                       → fills any gaps (free, very reliable for ISBN books)
  * input = what we already know: { title, author, titleSinglish, authorSinglish, translator, language, isbn }
  */
-function webLookup(input) {
+function webLookup(input, imageBase64) {
   if (!input || !String(input.title || '').trim()) throw new Error('Enter at least a title first');
+
+  // Lesson 8d: which language should the description be written in?
+  const allowed = ['Sinhala', 'English', 'Tamil'];
+  const lang = allowed.includes(input.answerLanguage) ? input.answerLanguage : 'English';   // allow-list again
+  const answerIn = {
+    Sinhala: 'in natural Sinhala (සිංහල, Unicode Sinhala script — not Singlish)',
+    Tamil: 'in natural Tamil (தமிழ் script)',
+    English: 'in English'
+  }[lang];
   const known = ['title', 'author', 'titleSinglish', 'authorSinglish', 'translator', 'language', 'isbn', 'publisher']
     .filter(k => input[k]).map(k => k + ': ' + String(input[k]).slice(0, 200)).join('\n');
   const translationHint = input.isTranslation
@@ -640,40 +649,69 @@ function webLookup(input) {
     '',
     'Answer with ONLY a JSON object (no other text, no citation marks) with these keys:',
     '  found: true only if you are confident it is THIS book (same title and author)',
-    '  description: 2-4 neutral sentences in English about what the book is about',
-    '  reviewSummary: 1-2 sentences on what readers or critics say (empty if unknown)',
+    '  description: 2-4 neutral sentences ' + answerIn + ' about what the book is about',
+    '  reviewSummary: 1-2 sentences ' + answerIn + ' on what readers or critics say (empty if unknown)',
+    'Write description and reviewSummary ' + answerIn + ' even if the sources are in another language.',
+    'Keep names of people and books exactly as they are usually written in that language.',
     '  originalTitle, originalAuthor, originalLanguage: only if it is a translation',
     '  translator, publisher, year, pageCount',
     '  categories: 1-3 items ONLY from: ' + BOOK_CATEGORIES.join(', '),
-    'Use empty strings for anything you do not know. Never invent facts.'
+    'Use empty strings for anything you do not know. Never invent facts.',
+    '',
+    // Lesson 8e: fix OCR mistakes in the title/author
+    'IMPORTANT: title and author above were read by an AI from a photo and may have spelling mistakes',
+    '(common in Sinhala: similar letters like ව/ච, ද/ඳ, missing ් or ා). If the sources' +
+      (imageBase64 ? ' and the attached cover photo' : '') + ' show the CORRECT spelling for THIS book, give:',
+    '  correctedTitle, correctedAuthor: the correct spelling, in the SAME script as printed on the cover',
+    '  correctedTitleSinglish, correctedAuthorSinglish: the same in English letters, as Sri Lankans type them',
+    'Leave the corrected fields EMPTY if the reading was already right or if you are not sure.'
   ].join('\n');
+
+  // The photo helps the AI decide between the web spelling and what is really printed
+  const photoPart = imageBase64 ? [{ inline_data: { mime_type: 'image/jpeg', data: imageBase64 } }] : [];
 
   let info = null, mode = 'none', sources = [];
   const notes = [];
 
-  // ---- 1. with Google Search ----
+  // ---- 1. Search the web ourselves (free), then let Gemini read ONLY those pages ----
+  // Gemini's built-in Google Search has no free quota on many keys, so we do the search:
+  //   Tavily (if TAVILY_API_KEY is set) → otherwise Wikipedia (English + Sinhala, no key needed)
+  // This pattern is called RAG: "Retrieval-Augmented Generation" — find text, then ask the AI about it.
+  let pages = [];
   try {
-    const answer = geminiRequest({
-      contents: [{ parts: [{ text: 'Search the web first. ' + prompt }] }],
-      tools: [{ google_search: {} }],       // ← lets Gemini run Google searches before answering
-      generationConfig: { temperature: 0.2 }
-      // no responseSchema: structured output + search tool do not mix on every model
-    });
-    info = parseJsonLoose(answerText(answer));
-    const chunks = (answer.candidates[0].groundingMetadata || {}).groundingChunks || [];
-    sources = chunks.filter(c => c.web && c.web.uri).slice(0, 5)
-      .map(c => ({ title: c.web.title || c.web.uri, url: c.web.uri }));
-    mode = 'web';
+    pages = searchTheWeb(input);
   } catch (err) {
-    console.warn('Web search failed: ' + err.message);
-    notes.push('Web search unavailable (' + err.message + ')');
+    console.warn('Search failed: ' + err.message);
+    notes.push('Search unavailable (' + err.message + ')');
+  }
+
+  if (pages.length) {
+    try {
+      const context = pages.map((p, i) =>
+        'SOURCE ' + (i + 1) + ': ' + p.title + ' (' + p.url + ')\n' + p.content.slice(0, 3000)).join('\n\n');
+      const answer = geminiRequest({
+        contents: [{ parts: [{ text: prompt +
+          '\n\nUse ONLY the sources below (and the photo). If they are about a different book, set found to false.\n\n' +
+          context }].concat(photoPart) }],
+        generationConfig: { temperature: 0.1, responseMimeType: 'application/json' }
+      });
+      const fromWeb = parseJsonLoose(answerText(answer));
+      if (fromWeb.found) {
+        info = fromWeb;
+        mode = 'web';
+        sources = pages.map(p => ({ title: p.title, url: p.url }));
+      }
+    } catch (err) {
+      console.warn('Reading search results failed: ' + err.message);
+      notes.push('AI could not read the results (' + err.message + ')');
+    }
   }
 
   // ---- 2. no search: the model's own knowledge ----
   if (!info || !info.found) {
     try {
       const answer = geminiRequest({
-        contents: [{ parts: [{ text: prompt }] }],
+        contents: [{ parts: [{ text: prompt }].concat(photoPart) }],
         generationConfig: { temperature: 0.2, responseMimeType: 'application/json' }
       });
       const fromAi = parseJsonLoose(answerText(answer));
@@ -861,4 +899,107 @@ function reasonText(feature, fans, book, newUser) {
   if (fans === 1) return 'A reader with your taste liked this';
   if (feature && feature.startsWith('cat:')) return 'Because you like ' + feature.slice(4);
   return 'Popular in the library';
+}
+
+
+// =====================================================================
+// Lesson 8c: free web search — Tavily (1,000 free searches / month) or Wikipedia (free, no key)
+// Each returns a list of pages: [{ title, url, content }]
+// =====================================================================
+
+function searchTheWeb(input) {
+  const tavilyKey = PropertiesService.getScriptProperties().getProperty('TAVILY_API_KEY');
+  const query = [input.title, input.author, input.titleSinglish, 'book'].filter(Boolean).join(' ');
+  if (tavilyKey) {
+    try {
+      const pages = tavilySearch(query, tavilyKey);
+      // Lesson 8e: also add similar titles from Google Books → helps fix a mis-read title
+      if (pages.length) return pages.concat(googleBooksCandidates(input));
+    } catch (err) {
+      console.warn(err.message + ' → trying Wikipedia instead');   // bad key / monthly limit used up
+    }
+  }
+  // Wikipedia: try English with the Singlish/English title, and Sinhala with the Sinhala title
+  const results = [];
+  const enTitle = input.titleSinglish || input.title;
+  results.push(...wikipediaSearch('en', enTitle + ' ' + (input.authorSinglish || input.author || '')));
+  results.push(...googleBooksCandidates(input));
+  if (/[\u0D80-\u0DFF]/.test(input.title)) results.push(...wikipediaSearch('si', input.title));
+  return results;
+}
+
+/** https://tavily.com — sign up for a free key, no credit card. */
+function tavilySearch(query, apiKey) {
+  const res = UrlFetchApp.fetch('https://api.tavily.com/search', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + apiKey },
+    payload: JSON.stringify({ query: query, search_depth: 'basic', max_results: 5 }),
+    muteHttpExceptions: true
+  });
+  if (res.getResponseCode() !== 200) {
+    throw new Error('Tavily ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 150));
+  }
+  return (JSON.parse(res.getContentText()).results || [])
+    .filter(r => r.url && r.content)
+    .map(r => ({ title: r.title || r.url, url: r.url, content: r.content }));
+}
+
+/** Wikipedia search → the intro text of the best 2 matching articles. Free, no key. */
+function wikipediaSearch(lang, query) {
+  const base = 'https://' + lang + '.wikipedia.org/w/api.php?format=json&action=query';
+  const search = UrlFetchApp.fetch(base + '&list=search&srlimit=2&srsearch=' + encodeURIComponent(query),
+    { muteHttpExceptions: true });
+  if (search.getResponseCode() !== 200) return [];
+  const hits = (JSON.parse(search.getContentText()).query || {}).search || [];
+  if (!hits.length) return [];
+
+  // prop=extracts&exintro&explaintext = "give me the first section as plain text"
+  const titles = hits.map(h => h.title).join('|');
+  const pagesRes = UrlFetchApp.fetch(base + '&prop=extracts&exintro=1&explaintext=1&titles=' +
+    encodeURIComponent(titles), { muteHttpExceptions: true });
+  if (pagesRes.getResponseCode() !== 200) return [];
+  const pages = (JSON.parse(pagesRes.getContentText()).query || {}).pages || {};
+  return Object.keys(pages).map(id => pages[id]).filter(p => p.extract).map(p => ({
+    title: p.title + ' — Wikipedia',
+    url: 'https://' + lang + '.wikipedia.org/wiki/' + encodeURIComponent(p.title.replace(/ /g, '_')),
+    content: p.extract
+  }));
+}
+
+/** Run from the editor: shows what the free search finds (no AI involved). */
+function testSearch() {
+  Logger.log(JSON.stringify(searchTheWeb({ title: 'මඩොල් දූව', titleSinglish: 'Madol Doova',
+    authorSinglish: 'Martin Wickramasinghe' }).map(p => [p.title, p.url, p.content.slice(0, 120)]), null, 2));
+}
+
+
+/**
+ * Lesson 8e: up to 5 similar books from Google Books (free, no key) as ONE "page" of text.
+ * Searching by author + a rough title still finds the right book even when the title
+ * was read wrongly, and then the AI can pick the correct spelling from this list.
+ */
+function googleBooksCandidates(input) {
+  const q = [input.title, input.author].filter(Boolean).join(' ') ||
+    [input.titleSinglish, input.authorSinglish].filter(Boolean).join(' ');
+  if (!q) return [];
+  try {
+    const res = UrlFetchApp.fetch('https://www.googleapis.com/books/v1/volumes?maxResults=5&q=' +
+      encodeURIComponent(q), { muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return [];
+    const items = JSON.parse(res.getContentText()).items || [];
+    if (!items.length) return [];
+    const lines = items.map(it => {
+      const v = it.volumeInfo;
+      return '- "' + v.title + (v.subtitle ? ': ' + v.subtitle : '') + '" by ' + (v.authors || ['?']).join(', ') +
+        (v.publishedDate ? ' (' + String(v.publishedDate).slice(0, 4) + ')' : '');
+    });
+    return [{
+      title: 'Google Books search',
+      url: 'https://www.google.com/books?q=' + encodeURIComponent(q),
+      content: 'Books with similar titles/authors:\n' + lines.join('\n')
+    }];
+  } catch (err) {
+    return [];
+  }
 }
