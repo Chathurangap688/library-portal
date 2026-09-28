@@ -656,12 +656,17 @@ function geminiRequest(body, quick) {
   if (!apiKey) throw new Error('GEMINI_API_KEY is not set in Script properties');
   // Lesson 7b: a list of models to try. If the first is busy (503) or out of free quota (429),
   // we try the next one. Each model has its own free quota.
-  const models = [props.getProperty('GEMINI_MODEL') || 'gemini-flash-latest', 'gemini-flash-lite-latest'];
+  // Lesson 16: backups can be set in Script properties, e.g. GEMINI_BACKUP_MODELS = gemini-flash-lite-latest,gemini-2.5-flash
+  // (run testModels() to see which model names your key can use)
+  const backups = (props.getProperty('GEMINI_BACKUP_MODELS') || 'gemini-flash-lite-latest')
+    .split(',').map(m => m.trim()).filter(m => m);
+  const models = [props.getProperty('GEMINI_MODEL') || 'gemini-flash-latest'].concat(backups)
+    .filter((m, i, all) => all.indexOf(m) === i);          // remove duplicates
 
   let res = null, code = 0;
   tryModels:
   for (const model of models) {
-    const maxAttempts = quick ? 1 : 3;          // quick = no waiting/retries (used by the web lookup)
+    const maxAttempts = quick ? 2 : 3;          // quick = fewer, shorter retries (used by the web lookup)
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       res = UrlFetchApp.fetch(
         'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent', {
@@ -676,14 +681,18 @@ function geminiRequest(body, quick) {
       if (code === 429) break;                      // this model's quota is used up → next model
       if (code !== 503 && code !== 500) break tryModels;   // a real error (bad key…) → stop
       // 503/500 = "busy right now": wait 1 s, 2 s, 4 s ("exponential backoff"), then retry
-      if (attempt < maxAttempts) Utilities.sleep(1000 * Math.pow(2, attempt - 1));
+      if (attempt < maxAttempts) Utilities.sleep((quick ? 1500 : 1000) * Math.pow(2, attempt - 1));
     }
   }
 
   // Friendly messages for the user; details go to the Apps Script log (Executions)
   if (code !== 200) console.error('Gemini ' + code + ': ' + res.getContentText().slice(0, 500));
   if (code === 429) throw new Error('AI free limit reached for today. Try again later, or type the details.');
-  if (code === 503 || code === 500) throw new Error('The AI is very busy right now. Wait a minute and tap "Read cover" again.');
+  if (code === 503 || code === 500) {
+    const err = new Error('The AI is very busy right now. Please try again in a minute.');
+    err.busy = true;                      // lets callers try a lighter request
+    throw err;
+  }
   if (code === 400 || code === 403) {
     let reason = '';
     try { reason = JSON.parse(res.getContentText()).error.message; } catch (e) { /* not JSON */ }
@@ -838,12 +847,22 @@ function webLookup(input, imageBase64) {
     try {
       const context = pages.map((p, i) =>
         'SOURCE ' + (i + 1) + ': ' + p.title + ' (' + p.url + ')\n' + p.content.slice(0, 3000)).join('\n\n');
-      const answer = geminiRequest({
+      const ask = parts => geminiRequest({
         contents: [{ parts: [{ text: prompt +
-          '\n\nUse ONLY the sources below (and the photo). If they are about a different book, set found to false.\n\n' +
-          context }].concat(photoPart) }],
+          '\n\nUse ONLY the sources below' + (parts.length ? ' (and the photo)' : '') +
+          '. If they are about a different book, set found to false.\n\n' + context }].concat(parts) }],
         generationConfig: { temperature: 0.1, responseMimeType: 'application/json' }
       }, true);
+      let answer;
+      try {
+        answer = ask(photoPart);
+      } catch (err) {
+        // Lesson 16: a big request (text + photo) fails more often when Gemini is overloaded.
+        // Try once more WITHOUT the photo — smaller and faster.
+        if (!err.busy || !photoPart.length) throw err;
+        step('busy with photo → retry without photo');
+        answer = ask([]);
+      }
       step('AI read the pages');
       const fromWeb = parseJsonLoose(answerText(answer));
       if (fromWeb.found) {
@@ -858,7 +877,8 @@ function webLookup(input, imageBase64) {
   }
 
   // ---- 2. no search: the model's own knowledge ----
-  if ((!info || !info.found) && Date.now() - started < 60000) {   // skip if we already took > 1 minute
+  const aiBusy = notes.some(n => n.indexOf('busy') !== -1);        // busy a moment ago → still busy now
+  if ((!info || !info.found) && !aiBusy && Date.now() - started < 60000) {   // skip if slow or busy
     try {
       const answer = geminiRequest({
         contents: [{ parts: [{ text: prompt }].concat(photoPart) }],
@@ -871,6 +891,15 @@ function webLookup(input, imageBase64) {
       console.warn('AI knowledge lookup failed: ' + err.message);
       notes.push('AI unavailable (' + err.message + ')');
     }
+  }
+
+  // Lesson 16: the AI is down but the search DID find pages → still give the admin something:
+  // the raw text of the best page (not translated, not checked) + the links.
+  if ((!info || !info.found) && pages.length && notes.some(n => n.indexOf('busy') !== -1)) {
+    const best = pages.find(p => p.title !== 'Google Books search') || pages[0];
+    info = { found: true, description: best.content.replace(/\s+/g, ' ').slice(0, 700) };
+    mode = 'sources';
+    sources = pages.map(p => ({ title: p.title, url: p.url }));
   }
 
   info = info && info.found ? info : { found: false };
@@ -1364,4 +1393,17 @@ function listActiveLoans() {
       days: Math.floor((now - new Date(l.borrowedAt).getTime()) / 86400000)   // 86 400 000 ms = 1 day
     };
   }).sort((a, b) => b.days - a.days);
+}
+
+
+/** Lesson 16: run from the editor → lists the Gemini models YOUR key can use (look at the log). */
+function testModels() {
+  const key = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  const res = UrlFetchApp.fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',
+    { headers: { 'x-goog-api-key': key }, muteHttpExceptions: true });
+  const models = (JSON.parse(res.getContentText()).models || [])
+    .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+    .map(m => m.name.replace('models/', ''))
+    .filter(n => n.includes('flash'));
+  Logger.log('Models you can use (flash family):\n' + models.join('\n'));
 }

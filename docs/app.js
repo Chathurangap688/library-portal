@@ -1271,7 +1271,8 @@ async function runWebLookup(auto) {
       if (value && value.trim() && value.trim() !== f[field].value.trim()) info[field] = value.trim();
     });
 
-    const from = { web: 'the web', ai: 'AI knowledge (not a web search — double-check!)', googlebooks: 'Google Books' }[info.mode];
+    const from = { web: 'the web', ai: 'AI knowledge (not a web search — double-check!)', googlebooks: 'Google Books',
+      sources: 'web pages — but the AI was busy, so this is the raw page text (not translated). Tick it only if it fits' }[info.mode];
     status.textContent = 'Found via ' + from + '.';
     showWebResults(info);
     if (auto && !box.hidden) applyWebResults(true);   // auto: apply the ticked rows right away
@@ -1297,7 +1298,7 @@ function showWebResults(info) {
       if (same) return '';
       // Pre-tick only empty fields — and nothing at all when it came from AI memory (less reliable)
       const isCorrection = ['title', 'author', 'titleSinglish', 'authorSinglish'].includes(key);
-      const tick = info.mode !== 'ai' && (!current || (isCorrection && info.mode === 'web'));
+      const tick = !['ai', 'sources'].includes(info.mode) && (!current || (isCorrection && info.mode === 'web'));
       const note = isCorrection && current ? ` <small>(was: ${escapeHtml(current)})</small>`
         : current ? ' <small>(replaces current)</small>' : '';
       return `
