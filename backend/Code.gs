@@ -16,6 +16,7 @@ function doGet(e) {
 function booksFor(user) {
   const books = user.role === 'admin' ? readBooks() : readBooks().map(hidePrivateFields);
   addRatingsToBooks(books);
+  addLoansToBooks(books, user.role === 'admin', user.email);   // Lesson 14: in stock / on loan
   return { ok: true, books: books, categories: BOOK_CATEGORIES };
 }
 
@@ -158,6 +159,19 @@ function doPost(e) {
       requireAdmin(user);
       return jsonResponse({ ok: true, book: addCopy(request.bookId) });
     }
+    // ---- Lesson 14: lending ----
+    if (request.action === 'lendBook') {
+      requireAdmin(user);
+      return jsonResponse({ ok: true, loan: lendBook(user, request.bookId, request.email) });
+    }
+    if (request.action === 'returnBook') {
+      requireAdmin(user);
+      return jsonResponse({ ok: true, loan: returnBook(user, request.loanId) });
+    }
+    if (request.action === 'listLoans') {
+      requireAdmin(user);
+      return jsonResponse({ ok: true, loans: listActiveLoans() });
+    }
     if (request.action === 'deleteBook') {
       requireAdmin(user);
       return jsonResponse({ ok: true, result: deleteBook(request.bookId) });
@@ -274,6 +288,8 @@ function setUserStatus(admin, email, status) {
 /** Admin: remove a user, their sessions, reading history and ratings. */
 function deleteUser(admin, email) {
   guardOtherUser(admin, email);
+  const holding = activeLoans().filter(l => l.email === email).length;
+  if (holding) throw new Error('This user still has ' + holding + ' book(s). Mark them as returned first.');
   const mine = r => r.email === email;
   deleteRowsWhere(getSheet('Users', USER_HEADERS), mine);
   deleteRowsWhere(getSheet('Sessions', SESSION_HEADERS), mine);        // signs them out everywhere
@@ -528,6 +544,9 @@ function saveBook(user, input, imageBase64) {
 
 function deleteBook(bookId) {
   requireBook(bookId);
+  if (activeLoans().some(l => String(l.bookId) === String(bookId))) {
+    throw new Error('This book is lent out. Mark it as returned before deleting it.');
+  }
   const same = r => String(r.bookId) === String(bookId);
   deleteRowsWhere(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME), r => String(r.id) === String(bookId));
   // Also remove its reading status + ratings, so no "orphan" rows are left behind
@@ -1257,4 +1276,92 @@ function addCopy(bookId) {
   book.updatedAt = new Date().toISOString();
   upsertRow(sheet, r => String(r.id) === String(bookId), headers.map(h => book[h] === undefined ? '' : book[h]));
   return { id: book.id, title: book.title, copies: book.copies };
+}
+
+
+// =====================================================================
+// Lesson 14: lending books
+//   Loans sheet: loanId | bookId | email | userName | borrowedAt | returnedAt | assignedBy | returnedBy
+//   A loan with an EMPTY returnedAt = the book is out right now.
+//   Returned loans are kept = a lending history.
+//   Every book is "in stock" by default: available = copies − books out.
+// =====================================================================
+
+const LOAN_HEADERS = ['loanId', 'bookId', 'email', 'userName', 'borrowedAt', 'returnedAt', 'assignedBy', 'returnedBy'];
+
+function loansSheet() { return getSheet('Loans', LOAN_HEADERS); }
+
+function activeLoans() {
+  return readRows(loansSheet()).filter(l => l.loanId && !l.returnedAt);
+}
+
+/** Adds book.available and book.loans (who has it, since when). Emails only for admins. */
+function addLoansToBooks(books, forAdmin, myEmail) {
+  const loans = activeLoans();
+  books.forEach(book => {
+    const out = loans.filter(l => String(l.bookId) === String(book.id));
+    const copies = Number(book.copies) || 1;
+    book.available = Math.max(0, copies - out.length);
+    book.loans = out.map(l => {
+      const info = { userName: l.userName, since: l.borrowedAt, mine: l.email === myEmail };
+      if (forAdmin) { info.loanId = l.loanId; info.email = l.email; }
+      return info;
+    });
+  });
+}
+
+function lendBook(admin, bookId, email) {
+  email = String(email || '').toLowerCase();
+  const book = readBooks().find(b => String(b.id) === String(bookId));
+  if (!book) throw new Error('Book not found');
+
+  const borrower = readRows(getSheet('Users', USER_HEADERS)).find(u => u.email === email);
+  if (!borrower) throw new Error('User not found');
+  if ((borrower.status || 'active') !== 'active' && !adminEmails().includes(email)) {
+    throw new Error('This user is not activated yet');
+  }
+
+  const out = activeLoans().filter(l => String(l.bookId) === String(bookId));
+  if (out.some(l => l.email === email)) throw new Error(borrower.name + ' already has this book');
+  if (out.length >= (Number(book.copies) || 1)) throw new Error('No copy left — all copies are lent out');
+
+  const loan = {
+    loanId: 'L' + Utilities.getUuid().slice(0, 8), bookId: String(book.id), email: email,
+    userName: borrower.name || email, borrowedAt: new Date().toISOString(),
+    returnedAt: '', assignedBy: admin.email, returnedBy: ''
+  };
+  upsertRow(loansSheet(), () => false, LOAN_HEADERS.map(h => loan[h]));   // () => false = always a new row
+
+  // Nice touch: the borrower's reading status becomes "Reading" (unless they already read it)
+  const reading = readRows(getSheet('Reading', ['email', 'bookId', 'status', 'updatedAt']))
+    .find(r => r.email === email && String(r.bookId) === String(bookId));
+  if (!reading || reading.status !== 'read') setStatus({ email: email }, bookId, 'reading');
+
+  return loan;
+}
+
+function returnBook(admin, loanId) {
+  const sheet = loansSheet();
+  const loan = readRows(sheet).find(l => l.loanId === loanId);
+  if (!loan) throw new Error('Loan not found');
+  if (loan.returnedAt) throw new Error('Already returned');
+  loan.returnedAt = new Date().toISOString();
+  loan.returnedBy = admin.email;
+  upsertRow(sheet, l => l.loanId === loanId, LOAN_HEADERS.map(h => loan[h]));
+  return loan;
+}
+
+/** For the admin "On loan" list: every book that is out, with how many days. Longest first. */
+function listActiveLoans() {
+  const books = {};
+  readBooks().forEach(b => { books[String(b.id)] = b; });
+  const now = Date.now();
+  return activeLoans().map(l => {
+    const b = books[String(l.bookId)] || {};
+    return {
+      loanId: l.loanId, bookId: l.bookId, title: b.title || '(deleted book)', coverUrl: b.coverUrl || '',
+      shelf: b.shelf || '', userName: l.userName, email: l.email, since: l.borrowedAt,
+      days: Math.floor((now - new Date(l.borrowedAt).getTime()) / 86400000)   // 86 400 000 ms = 1 day
+    };
+  }).sort((a, b) => b.days - a.days);
 }

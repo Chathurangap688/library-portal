@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>My Library</title>
-  <!-- ?v=… = "cache busting": change the number on every release so browsers fetch the NEW files -->
-  <link rel="stylesheet" href="styles.css?v=2026092805">
+  <!-- ?v=__VERSION__ is replaced automatically by .github/workflows/pages.yml on every push -->
+  <link rel="stylesheet" href="styles.css?v=__VERSION__">
   <!-- defer = download now, but run only after the whole page is built -->
-  <script src="config.js?v=2026092805" defer></script>
-  <script src="app.js?v=2026092805" defer></script>
+  <script src="config.js?v=__VERSION__" defer></script>
+  <script src="app.js?v=__VERSION__" defer></script>
   <!-- Lesson 4: Google's sign-in library -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -48,6 +48,7 @@
 
     <!-- Lesson 4: shown when signed IN -->
     <div id="userBox" hidden>
+      <button id="loansButton" type="button" hidden>📕 On loan <span id="loanBadge" hidden></span></button>
       <button id="usersButton" type="button" hidden>👥 Users <span id="pendingBadge" hidden></span></button>
       <button id="addBookButton" type="button" hidden>+ Add book</button>
       <img id="userPicture" alt="" referrerpolicy="no-referrer">
@@ -81,6 +82,9 @@
       <label>
         <input id="onlyTranslations" type="checkbox"> Translations only
       </label>
+      <label>
+        <input id="onlyAvailable" type="checkbox"> In stock only
+      </label>
     </div>
 
     <!-- Lesson 8: only shown when signed in -->
@@ -95,6 +99,14 @@
     <div id="grid"></div>
   </main>
   </div> <!-- /#app -->
+
+  <!-- Lesson 14: admin — books that are lent out -->
+  <dialog id="loansDialog">
+    <button type="button" class="close-loans" aria-label="Close">×</button>
+    <h2>Books on loan</h2>
+    <p id="loansStatus"></p>
+    <div id="loansList"></div>
+  </dialog>
 
   <!-- Lesson 10: admin — user accounts -->
   <dialog id="usersDialog">

@@ -87,7 +87,7 @@ function bookCard(book) {
   // data-id remembers WHICH book this card is, for the click handler.
   return `
     <div class="book" data-id="${escapeHtml(book.id)}">
-      ${coverHtml(book, statusLabel)}
+      ${coverHtml(book, statusLabel + loanOverlay(book))}
       <div class="title">${escapeHtml(book.title)}</div>
       <div class="author">${escapeHtml(book.author)}</div>
       <div class="meta">${escapeHtml(book.language)} · ${escapeHtml(book.categories.join(', '))}${copiesLabel}</div>
@@ -95,6 +95,26 @@ function bookCard(book) {
       ${badge}
     </div>
   `;
+}
+
+// Lesson 14: "Unavailable" watermark when every copy is lent out
+function loanOverlay(book) {
+  const loans = book.loans || [];
+  if (!loans.length) return '';
+  const copies = Number(book.copies) || 1;
+  if (book.available > 0) {                     // some copies out, some still here
+    return `<span class="stock-note">${book.available} of ${copies} in stock</span>`;
+  }
+  const who = loans.map(l => escapeHtml(firstName(l.userName))).join(', ');
+  return `<div class="on-loan"><b>UNAVAILABLE</b><small>with ${who}</small></div>`;
+}
+
+function firstName(name) { return String(name || '').split(' ')[0]; }
+
+function daysSince(iso) { return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)); }
+
+function niceDate(iso) {
+  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 // Lesson 7: a real picture if we have one, otherwise the coloured box with the title
@@ -136,6 +156,7 @@ function applyFilters() {
   const language = document.getElementById('language').value;
   const onlyTranslations = document.getElementById('onlyTranslations').checked;
   const pickedCategories = selectedFilterCategories();
+  const onlyAvailable = document.getElementById('onlyAvailable').checked;   // Lesson 14
 
   const result = books.filter(book => {
     // 1. Search: exact text (works for Sinhala typing) OR the loose Singlish key
@@ -154,7 +175,10 @@ function applyFilters() {
       (book.categories || []).some(c => pickedCategories.includes(c));
 
     // Keep the book only if ALL three checks pass
-    return matchesSearch && matchesLanguage && matchesTranslation && matchesCategory;
+    // 5. Lesson 14: "In stock only" hides books whose copies are all lent out
+    const matchesStock = !onlyAvailable || book.available === undefined || book.available > 0;
+
+    return matchesSearch && matchesLanguage && matchesTranslation && matchesCategory && matchesStock;
   });
 
   document.getElementById('count').textContent = `Showing ${result.length} of ${books.length} books`;
@@ -165,6 +189,7 @@ function applyFilters() {
 document.getElementById('search').addEventListener('input', applyFilters);   // every key press
 document.getElementById('language').addEventListener('change', applyFilters);
 document.getElementById('onlyTranslations').addEventListener('change', applyFilters);
+document.getElementById('onlyAvailable').addEventListener('change', applyFilters);
 
 // ------------------------------------------------------------------
 // Category filter (multi-select dropdown)
@@ -321,6 +346,7 @@ async function loadBooks() {
     books = data.books;                           // 3. store the list
     allCategories = data.categories || [];
     buildCategoryFilter();
+    if (isAdmin()) updateLoanBadge();             // Lesson 14
     applyFilters();                               // 4. draw it
   } catch (err) {
     // Network down, wrong URL, script error… show it instead of a blank page
@@ -461,6 +487,7 @@ async function startApp(data) {
   await loadBooks();
   loadRecommendations();          // Lesson 8 (no await)
   if (isAdmin()) refreshPendingBadge();   // Lesson 10
+  if (isAdmin()) updateLoanBadge();       // Lesson 14
 }
 
 // ------------------------------------------------------------------
@@ -501,6 +528,7 @@ async function loadUsers() {
     status.textContent = `${userList.length} user(s)` + (waiting ? ` · ${waiting} waiting for activation` : '');
     renderUsers();
     setPendingBadge(waiting);
+    rememberActiveUsers(userList);
   } catch (err) {
     status.textContent = err.message;
   }
@@ -552,7 +580,15 @@ async function refreshPendingBadge() {
   try {
     const users = (await callApi('listUsers')).users;
     setPendingBadge(users.filter(u => u.status === 'pending').length);
+    rememberActiveUsers(users);                     // Lesson 14: for the "Lend to…" list
   } catch (e) { /* not important */ }
+}
+
+// Lesson 14: people a book can be lent to (active accounts, sorted by name)
+let activeUsers = [];
+function rememberActiveUsers(users) {
+  activeUsers = users.filter(u => u.status === 'active')
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 }
 
 function setPendingBadge(count) {
@@ -600,6 +636,7 @@ function showUser() {
   // Lesson 6: only admins see the Add button (just convenience — the SERVER enforces it)
   document.getElementById('addBookButton').hidden = !isAdmin();
   document.getElementById('usersButton').hidden = !isAdmin();     // Lesson 10
+  document.getElementById('loansButton').hidden = !isAdmin();     // Lesson 14
 }
 
 async function signOut() {
@@ -681,6 +718,7 @@ function openBook(bookId) {
     <p class="meta">${escapeHtml(book.language)} · ${escapeHtml(book.categories.join(', '))}
       ${book.isTranslation ? ' · Translation' : ''}</p>
     ${translationInfo(book)}
+    ${availabilityHtml(book)}
     ${book.description ? `<p class="desc">${escapeHtml(book.description)}</p>` : ''}
     ${book.reviewSummary ? `<p class="desc"><b>What readers say:</b> ${escapeHtml(book.reviewSummary)}</p>` : ''}
     ${sourcesHtml(book.webSources)}
@@ -723,6 +761,19 @@ dialog.addEventListener('click', async event => {
 
   // Lesson 6: admin buttons inside the popup
   if (event.target.id === 'editBook') { dialog.close(); openEditor(openBookId); return; }
+
+  // Lesson 14: lend / return from the book popup
+  if (event.target.id === 'lendButton') {
+    const email = document.getElementById('lendTo').value;
+    if (!email) { alert('Choose who takes the book'); return; }
+    await runLoanAction(event.target, 'lendBook', { bookId: openBookId, email: email });
+    return;
+  }
+  const returnBtn = event.target.closest('[data-return]');
+  if (returnBtn) {
+    await runLoanAction(returnBtn, 'returnBook', { loanId: returnBtn.dataset.return });
+    return;
+  }
   if (event.target.id === 'deleteBook') { deleteBookConfirmed(openBookId); return; }
 
   if (event.target.id === 'saveRating') {
@@ -762,9 +813,43 @@ function adminDetails(book) {
         ${row('Purchase date', String(book.purchaseDate || '').slice(0, 10))}${row('Price', book.price)}
         ${row('Notes', book.notes)}${row('Added by', book.addedBy)}
       </table>
+      ${lendingHtml(book)}
       <button type="button" id="editBook">Edit</button>
       <button type="button" id="deleteBook" class="danger">Delete</button>
     </div>`;
+}
+
+// Lesson 14: shown to everybody in the book popup
+function availabilityHtml(book) {
+  const loans = book.loans || [];
+  const copies = Number(book.copies) || 1;
+  if (!loans.length) return `<p class="stock in">✅ In stock${copies > 1 ? ` · ${copies} copies` : ''}</p>`;
+  const lines = loans.map(l => {
+    const mine = l.mine === true;                  // the server tells us which loans are ours
+    return `${mine ? '<b>You</b> have' : escapeHtml(l.userName) + ' has'} it since ${escapeHtml(niceDate(l.since))} (${daysSince(l.since)} days)`;
+  });
+  return `<p class="stock ${book.available > 0 ? 'in' : 'out'}">
+    ${book.available > 0 ? `✅ ${book.available} of ${copies} in stock` : '📕 Unavailable'}<br>
+    <small>${lines.join('<br>')}</small></p>`;
+}
+
+// Lesson 14: admin — lend to a user / mark as returned
+function lendingHtml(book) {
+  const loans = book.loans || [];
+  const outNow = loans.map(l => `
+    <div class="loan-line">
+      📕 ${escapeHtml(l.userName)} · ${daysSince(l.since)} days
+      <button type="button" data-return="${escapeHtml(l.loanId)}">✓ Returned</button>
+    </div>`).join('');
+  const holders = loans.map(l => l.email);
+  const choices = activeUsers.filter(u => !holders.includes(u.email))
+    .map(u => `<option value="${escapeHtml(u.email)}">${escapeHtml(u.name || u.email)}</option>`).join('');
+  const lendRow = book.available > 0 ? `
+    <div class="lend-row">
+      <select id="lendTo"><option value="">Lend to…</option>${choices}</select>
+      <button type="button" id="lendButton" class="primary">Lend</button>
+    </div>` : '<p><small>All copies are lent out.</small></p>';
+  return `<div class="lending"><b>Lending</b>${outNow}${lendRow}</div>`;
 }
 
 // Open the form: empty for a new book, filled in for an existing one
@@ -1536,5 +1621,114 @@ function showToast(message, bookId) {
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => toast.classList.remove('show'), 6000);
 }
+
+// ------------------------------------------------------------------
+// Lesson 14: lending — shared helper + the admin "On loan" list
+// ------------------------------------------------------------------
+const OVERDUE_DAYS = 14;        // after this many days the book is shown in red
+
+// Run lend/return, then refresh everything that shows availability
+async function runLoanAction(button, action, params) {
+  button.disabled = true;
+  try {
+    await callApi(action, params);
+    await loadBooks();                          // cards + watermark
+    if (dialog.open && openBookId) openBook(openBookId);   // popup
+    if (loansDialog.open) loadLoans();          // the On-loan list
+    updateLoanBadge();
+    showToast(action === 'lendBook' ? '📕 Lent out' : '✅ Marked as returned');
+  } catch (err) {
+    alert(err.message);
+    button.disabled = false;
+  }
+}
+
+// The badge on the button = number of books out right now (from the loaded book list)
+function updateLoanBadge() {
+  const out = books.reduce((sum, b) => sum + (b.loans || []).length, 0);
+  const late = books.reduce((sum, b) => sum + (b.loans || []).filter(l => daysSince(l.since) > OVERDUE_DAYS).length, 0);
+  const badge = document.getElementById('loanBadge');
+  badge.textContent = out;
+  badge.hidden = out === 0;
+  badge.classList.toggle('late', late > 0);
+}
+
+const loansDialog = document.getElementById('loansDialog');
+document.getElementById('loansButton').addEventListener('click', () => { loansDialog.showModal(); loadLoans(); });
+loansDialog.querySelector('.close-loans').addEventListener('click', () => loansDialog.close());
+
+async function loadLoans() {
+  const status = document.getElementById('loansStatus');
+  status.textContent = 'Loading…';
+  try {
+    const { loans } = await callApi('listLoans');
+    const late = loans.filter(l => l.days > OVERDUE_DAYS).length;
+    status.textContent = loans.length
+      ? `${loans.length} book(s) out` + (late ? ` · ${late} kept longer than ${OVERDUE_DAYS} days` : '')
+      : 'Every book is in stock. 🎉';
+    document.getElementById('loansList').innerHTML = loans.map(l => {
+      const level = l.days > OVERDUE_DAYS * 2 ? 'very-late' : l.days > OVERDUE_DAYS ? 'late' : 'ok';
+      // mailto: opens the admin's email app with a ready-made reminder
+      const subject = encodeURIComponent('Please return "' + l.title + '"');
+      const bodyText = encodeURIComponent(`Hi ${firstName(l.userName)},\n\nYou borrowed "${l.title}" from the office library ` +
+        `on ${niceDate(l.since)} (${l.days} days ago). Please return it when you can.\n\nThank you!`);
+      return `
+        <div class="loan-row ${level}">
+          ${l.coverUrl ? `<img src="${escapeHtml(l.coverUrl)}" alt="" referrerpolicy="no-referrer">` : '<div class="dup-nocover">📕</div>'}
+          <div>
+            <b>${escapeHtml(l.title)}</b><br>
+            <small>${escapeHtml(l.userName)} · since ${escapeHtml(niceDate(l.since))}${l.shelf ? ' · ' + escapeHtml(l.shelf) : ''}</small>
+          </div>
+          <div class="days ${level}">${l.days}<small>days</small></div>
+          <div class="loan-actions">
+            <a href="mailto:${encodeURIComponent(l.email)}?subject=${subject}&body=${bodyText}">✉️ Remind</a>
+            <button type="button" data-return="${escapeHtml(l.loanId)}">✓ Returned</button>
+          </div>
+        </div>`;
+    }).join('');
+  } catch (err) {
+    status.textContent = err.message;
+  }
+}
+
+document.getElementById('loansList').addEventListener('click', event => {
+  const button = event.target.closest('[data-return]');
+  if (button) runLoanAction(button, 'returnBook', { loanId: button.dataset.return });
+});
+
+// ------------------------------------------------------------------
+// Lesson 15: automatic update check
+// The deploy workflow writes the SAME version into this file and into version.json.
+// If version.json on the server is newer than the code running here → reload.
+// ------------------------------------------------------------------
+const APP_VERSION = '__VERSION__';
+
+async function checkForUpdate() {
+  if (APP_VERSION.startsWith('__')) return;          // running locally (not stamped) → skip
+  try {
+    // cache: 'no-store' + a changing ?t= → always ask GitHub, never the browser cache
+    const res = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    const { version } = await res.json();
+    if (!version || version === APP_VERSION) return;
+    // Already tried this exact version (GitHub's servers may need a minute) → don't loop
+    if (new URLSearchParams(location.search).get('v') === version) return;
+
+    // Don't throw away someone's half-filled form — ask instead
+    if (document.querySelector('dialog[open]')) {
+      showToast('🔄 A new version of the library is ready — close this window to update.');
+      return;
+    }
+    // Open the page with ?v=<new version>: a NEW address, so even index.html comes fresh
+    location.replace(location.pathname + '?v=' + encodeURIComponent(version) + location.hash);
+  } catch (err) {
+    /* offline or no version.json — just keep going */
+  }
+}
+
+// When: at start, every time you come back to the tab, and every 30 minutes
+checkForUpdate();
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdate(); });
+setInterval(checkForUpdate, 30 * 60 * 1000);
+document.querySelectorAll('dialog').forEach(d => d.addEventListener('close', checkForUpdate));
 
 startup();

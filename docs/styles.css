@@ -404,3 +404,49 @@ img { max-width: 100%; }
   .dup-actions { grid-column: 1 / -1; }
   #toast { bottom: 16px; }
 }
+
+/* ---------- Lesson 14: lending ---------- */
+.on-loan {                                   /* the "watermark" over the cover */
+  position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center; gap: 4px;
+  background: rgba(20, 20, 20, .55); color: white; border-radius: inherit; padding: 8px;
+}
+.on-loan b { transform: rotate(-12deg); border: 2px solid white; padding: 2px 8px; letter-spacing: 1px; font-size: 0.85rem; }
+.on-loan small { font-size: 0.75rem; opacity: .9; }
+.stock-note { position: absolute; bottom: 8px; left: 8px; z-index: 2; background: #fff1c7; color: #6b4d00;
+  font-size: 0.7rem; padding: 2px 8px; border-radius: 999px; }
+.book:has(.on-loan) .title, .book:has(.on-loan) .author { opacity: .6; }
+
+.stock { padding: 8px 10px; border-radius: 8px; }
+.stock.in { background: #dfeae6; color: #1f4e46; }
+.stock.out { background: #f6e3e1; color: #7a2620; }
+
+.lending { border-top: 1px dashed #c98a12; margin: 10px 0; padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.loan-line { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.lend-row { display: flex; gap: 8px; }
+.lend-row select { flex: 1; padding: 8px; border-radius: 8px; font: inherit; }
+.lending button, .loan-actions button { border: 1px solid #ddd6c8; background: white; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.lending button.primary { background: #1f4e46; color: white; border-color: #1f4e46; }
+
+#loansButton { background: transparent; color: white; border: 1px solid rgba(255,255,255,.5);
+  border-radius: 999px; padding: 6px 14px; cursor: pointer; }
+#loansButton[hidden] { display: none; }
+#loanBadge { background: #dfeae6; color: #1f4e46; border-radius: 999px; padding: 0 7px; margin-left: 4px; font-weight: bold; }
+#loanBadge.late { background: #e0544b; color: white; }
+#loanBadge[hidden] { display: none; }
+.close-loans { float: right; background: none; border: none; font-size: 28px; line-height: 1; cursor: pointer; }
+#loansDialog h2 { margin-top: 0; }
+#loansStatus { color: #676b68; font-size: 0.9rem; }
+.loan-row { display: grid; grid-template-columns: 40px 1fr auto; grid-template-rows: auto auto; gap: 6px 10px;
+  align-items: center; padding: 10px 6px; border-top: 1px solid #ddd6c8; }
+.loan-row img, .loan-row .dup-nocover { width: 40px; height: 58px; object-fit: cover; border-radius: 4px; grid-row: span 2; }
+.loan-row small { color: #676b68; }
+.days { text-align: center; font-weight: bold; font-size: 1.3rem; line-height: 1; padding: 6px 10px; border-radius: 8px; }
+.days small { display: block; font-size: 0.65rem; font-weight: normal; }
+.days.ok { background: #dfeae6; color: #1f4e46; }
+.days.late { background: #fff1c7; color: #6b4d00; }
+.days.very-late { background: #e0544b; color: white; }
+.days.very-late small { color: white; }
+.loan-actions { grid-column: 2 / -1; display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+.loan-actions a { color: #1f4e46; font-size: 0.9rem; }
+@media (max-width: 600px) { #loansButton { padding: 5px 10px; font-size: 0.8rem; } }
