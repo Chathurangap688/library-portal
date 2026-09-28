@@ -763,8 +763,8 @@ function testGemini() {
 const BOOK_CATEGORIES = [
   'Novel', 'Short Stories', 'Poetry', 'Classic', 'Children',
   'Mystery & Thriller', 'Romance', 'Science Fiction & Fantasy', 'Historical Fiction',
-  'Biography & Memoir', 'History', 'Buddhism', Natural beauty,
-  'Science', 'Technology', 'Education & Reference', 'Language & Linguistics', Bengali, Russian, War
+  'Biography & Memoir', 'History', 'Buddhism', 'Natural beauty',
+  'Science', 'Technology', 'Education & Reference', 'Language & Linguistics', 'Bengali', 'Russian', 'War'
 ];
 
 /**
@@ -1004,7 +1004,19 @@ function recommendBooks(myEmail, howMany) {
   const likedIds = Object.keys(mine).filter(id => mine[id] > 0 && byId[id]);
 
   // ---- 1. CONTENT: build my "taste profile" from the books I liked ----
-  const taste = {};                                    // e.g. { 'cat:Novel': 3, 'author:gunasekara': 2 }
+  // ---- Lesson 17: how RARE is each feature? ----
+  // If almost every book is a "Novel" (or "Sinhala"), sharing it says nothing about taste.
+  // IDF = "inverse document frequency" (a classic search-engine idea):
+  //   idf = log(total books / books with this feature)
+  //   feature in 1 of 100 books  → log(100)  ≈ 4.6  (very telling)
+  //   feature in 90 of 100 books → log(1.1)  ≈ 0.1  (almost meaningless)
+  const featureCount = {};
+  books.forEach(b => featuresOf(b).forEach(f => { featureCount[f] = (featureCount[f] || 0) + 1; }));
+  const idf = f => Math.log((books.length + 1) / ((featureCount[f] || 0) + 1));
+  // A feature in more than half of all books is never used as the "Because…" reason
+  const tooCommon = f => (featureCount[f] || 0) > books.length * 0.5;
+
+  const taste = {};                                    // e.g. { 'cat:History': 3, 'author:gunasekara': 2 }
   const add = (key, w) => { if (key) taste[key] = (taste[key] || 0) + w; };
   Object.keys(mine).forEach(id => {
     const b = byId[id];
@@ -1030,9 +1042,9 @@ function recommendBooks(myEmail, howMany) {
 
     let content = 0, bestFeature = null, bestWeight = 0;
     featuresOf(b).forEach(f => {
-      const w = (taste[f] || 0) * featureWeight(f);
+      const w = (taste[f] || 0) * featureWeight(f) * idf(f);   // rare features count more
       content += w;
-      if (w > bestWeight) { bestWeight = w; bestFeature = f; }
+      if (w > bestWeight && !tooCommon(f)) { bestWeight = w; bestFeature = f; }
     });
 
     let people = 0, fans = 0;
@@ -1046,6 +1058,9 @@ function recommendBooks(myEmail, howMany) {
 
     const score = content + 1.5 * people + 0.8 * popular;
     if (score <= 0 && likedIds.length > 0) return;     // nothing in common with my taste
+    // Lesson 17: only very common things in common (e.g. "Novel", "Sinhala") and nobody rated it
+    // → no real reason to suggest it
+    if (likedIds.length > 0 && !bestFeature && fans === 0 && !b.ratingCount) return;
 
     results.push({ bookId: id, score: Math.round(score * 100) / 100,
       reason: reasonText(bestFeature, fans, b, likedIds.length === 0) });
