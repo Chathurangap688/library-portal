@@ -368,7 +368,8 @@ function isAdmin() { return currentUser !== null && currentUser.role === 'admin'
 // Send a POST to Apps Script. Content-Type text/plain keeps it a "simple"
 // request, so the browser does not send an extra CORS "preflight" (Apps Script can't answer those).
 // Lesson 13: actions that only READ data are safe to repeat if the network hiccups
-const SAFE_TO_RETRY = ['me', 'books', 'recommend', 'listUsers', 'checkDuplicates'];
+// (analyzeCover / webLookup only read and ask the AI — they save nothing, so a retry is harmless)
+const SAFE_TO_RETRY = ['me', 'books', 'recommend', 'listUsers', 'checkDuplicates', 'listLoans', 'analyzeCover', 'webLookup'];
 
 async function callApi(action, params = {}) {
   const tries = SAFE_TO_RETRY.includes(action) ? 3 : 1;
