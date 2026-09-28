@@ -1065,7 +1065,7 @@ function polishCover(img, box) {
 
 /**
  * pixels = [R,G,B,A, R,G,B,A, ...] (0–255).
- * A photo taken in a dim office uses only part of 0–255 (e.g. 30–200).
+ * A photo taken in a dim private uses only part of 0–255 (e.g. 30–200).
  * We look at the BRIGHTNESS of all pixels, find the darkest and brightest 0.5 %,
  * and stretch that range to 0–255 → better contrast.
  * The same stretch is used for R, G and B, so the cover's real colours are kept.
@@ -1670,7 +1670,7 @@ async function loadLoans() {
       const level = l.days > OVERDUE_DAYS * 2 ? 'very-late' : l.days > OVERDUE_DAYS ? 'late' : 'ok';
       // mailto: opens the admin's email app with a ready-made reminder
       const subject = encodeURIComponent('Please return "' + l.title + '"');
-      const bodyText = encodeURIComponent(`Hi ${firstName(l.userName)},\n\nYou borrowed "${l.title}" from the office library ` +
+      const bodyText = encodeURIComponent(`Hi ${firstName(l.userName)},\n\nYou borrowed "${l.title}" from the my library ` +
         `on ${niceDate(l.since)} (${l.days} days ago). Please return it when you can.\n\nThank you!`);
       return `
         <div class="loan-row ${level}">

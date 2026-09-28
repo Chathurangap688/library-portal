@@ -570,7 +570,7 @@ function analyzeCover(imageBase64, mimeType) {
 
   // 1. Tell the AI exactly what we want. Clear rules = fewer made-up answers.
   const prompt = [
-    'This is a photo of a book cover from an office library in Sri Lanka.',
+    'This is a photo of a book cover from an private library in Sri Lanka.',
     'Read the text on the cover exactly as printed.',
     'If the title or author is NOT in English letters (Sinhala, Tamil...), also give titleSinglish and',
     'authorSinglish: the same words written in English letters the way Sri Lankans type them in chat',
