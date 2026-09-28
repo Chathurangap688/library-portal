@@ -387,20 +387,26 @@ const SAFE_TO_RETRY = ['me', 'books', 'recommend', 'listUsers', 'checkDuplicates
 
 async function callApi(action, params = {}) {
   const tries = SAFE_TO_RETRY.includes(action) ? 3 : 1;
+  // Lesson 19: remember WHICH session this call belongs to (see callApiOnce)
+  const tokenAtStart = sessionToken;
   for (let attempt = 1; ; attempt++) {
     try {
-      return await callApiOnce(action, params);
+      return await callApiOnce(action, params, tokenAtStart);
     } catch (err) {
       // Only retry "the server could not be reached / Google had a problem" — never a real answer
       if (!err.retryable || attempt >= tries) throw err;
+      // Signed out / signed in as someone new while we waited → this old call is pointless now
+      if (action !== 'login' && sessionToken !== tokenAtStart) throw err;
       console.warn(`${action} failed (${err.message}) — retry ${attempt}`);
       await new Promise(resolve => setTimeout(resolve, 1500 * attempt));   // wait 1.5 s, then 3 s
     }
   }
 }
 
-async function callApiOnce(action, params) {
-  const body = Object.assign({ action: action, sessionToken: sessionToken }, params);
+async function callApiOnce(action, params, tokenForThisCall) {
+  // Lesson 19: send the token this call STARTED with — never a newer or an emptied one
+  const tokenSent = tokenForThisCall === undefined ? sessionToken : tokenForThisCall;
+  const body = Object.assign({ action: action, sessionToken: tokenSent }, params);
   let response;
   try {
     response = await fetch(API_URL, {
@@ -431,7 +437,9 @@ async function callApiOnce(action, params) {
   }
   if (!data.ok) {
     // Lesson 9: session missing/expired → back to the login screen
-    if (data.code === 'AUTH' && action !== 'login') {
+    // Lesson 19: ONLY if the answer is about the session we still use right now.
+    // A late answer about an OLD session (the server was slow) must not log out a NEW one.
+    if (data.code === 'AUTH' && action !== 'login' && tokenSent && tokenSent === sessionToken) {
       forgetSession();
       showLoginScreen(data.error);
     }
