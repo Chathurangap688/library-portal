@@ -358,3 +358,49 @@ dialog h2 { margin-top: 0; }
 /* Keep the countdown visible while the form scrolls: "sticky" = normal until it would
    scroll away, then it sticks to the bottom edge of the popup */
 #autoSaveBar { position: sticky; bottom: 0; z-index: 5; box-shadow: 0 -4px 12px rgba(0,0,0,.08); }
+
+/* =====================================================================
+   Lesson 13: mobile fixes
+   ===================================================================== */
+html { -webkit-text-size-adjust: 100%; }        /* iPhone: don't enlarge text after rotating */
+html, body { max-width: 100%; overflow-x: hidden; }   /* safety net: never scroll sideways */
+img { max-width: 100%; }
+.retry-button { margin-top: 12px; background: white; color: #1f4e46; border: none; border-radius: 8px;
+  padding: 10px 18px; font: inherit; font-weight: bold; cursor: pointer; }
+#startupScreen { flex-direction: column; text-align: center; }
+
+@media (max-width: 600px) {
+  /* Header: title on the left, compact buttons; the long name is hidden (the photo is enough) */
+  header { padding: 10px 12px; flex-wrap: wrap; gap: 8px; }
+  header h1 { font-size: 1.15rem; white-space: nowrap; }
+  #userBox { gap: 6px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+  #userName { display: none; }
+  #userPicture { width: 28px; height: 28px; }
+  #usersButton, #addBookButton, #signOutButton { padding: 5px 10px; font-size: 0.8rem; white-space: nowrap; }
+
+  main { padding: 12px; }
+
+  /* Search bar on its own row, filters share the next row */
+  .toolbar { gap: 8px; }
+  .toolbar input[type="search"] { flex: 1 1 100%; }
+  .toolbar select, .multi-select { flex: 1 1 40%; min-width: 0; }
+  .multi-select summary { overflow: hidden; text-overflow: ellipsis; }
+  .multi-panel { left: 0; right: 0; min-width: 0; }
+
+  /* Two book columns on phones */
+  #grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .rec-row { grid-auto-columns: 42%; gap: 12px; }
+  .title { font-size: 0.9rem; overflow-wrap: anywhere; }
+  .meta, .reason { overflow-wrap: anywhere; }
+
+  /* iPhone ZOOMS IN when you tap a text box with a font smaller than 16px — that was the
+     "unexpected resizing". 16px inputs = no zoom. */
+  input, select, textarea, #bookForm input, #bookForm select, #bookForm textarea { font-size: 16px; }
+
+  /* Popups use (almost) the whole screen */
+  dialog { width: calc(100vw - 12px); max-width: none; max-height: 94vh; padding: 14px; }
+  .photo-box { grid-template-columns: 90px minmax(0, 1fr); }
+  .dup-row { grid-template-columns: 40px 1fr; }
+  .dup-actions { grid-column: 1 / -1; }
+  #toast { bottom: 16px; }
+}

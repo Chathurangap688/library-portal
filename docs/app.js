@@ -341,13 +341,38 @@ function isAdmin() { return currentUser !== null && currentUser.role === 'admin'
 
 // Send a POST to Apps Script. Content-Type text/plain keeps it a "simple"
 // request, so the browser does not send an extra CORS "preflight" (Apps Script can't answer those).
+// Lesson 13: actions that only READ data are safe to repeat if the network hiccups
+const SAFE_TO_RETRY = ['me', 'books', 'recommend', 'listUsers', 'checkDuplicates'];
+
 async function callApi(action, params = {}) {
+  const tries = SAFE_TO_RETRY.includes(action) ? 3 : 1;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await callApiOnce(action, params);
+    } catch (err) {
+      // Only retry "the server could not be reached / Google had a problem" — never a real answer
+      if (!err.retryable || attempt >= tries) throw err;
+      console.warn(`${action} failed (${err.message}) — retry ${attempt}`);
+      await new Promise(resolve => setTimeout(resolve, 1500 * attempt));   // wait 1.5 s, then 3 s
+    }
+  }
+}
+
+async function callApiOnce(action, params) {
   const body = Object.assign({ action: action, sessionToken: sessionToken }, params);
-  const response = await fetch(API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(body)
-  });
+  let response;
+  try {
+    response = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(body)
+    });
+  } catch (networkError) {
+    // Phone switched networks, weak signal, app was in the background…
+    const err = new Error('No connection to the server');
+    err.retryable = true;
+    throw err;
+  }
   // Lesson 8f: read as TEXT first. When Apps Script itself fails (timeout, crash, quota)
   // Google sends an HTML error page instead of our JSON → show its message, not "Unexpected token <"
   const text = await response.text();
@@ -358,8 +383,10 @@ async function callApi(action, params = {}) {
     const page = new DOMParser().parseFromString(text, 'text/html');   // read the HTML safely
     const message = (page.body ? page.body.textContent : text).replace(/\s+/g, ' ').trim().slice(0, 200);
     console.error('Non-JSON answer from Apps Script:', text);
-    throw new Error('Server problem (' + response.status + '): ' + (message || 'no details') +
+    const err = new Error('Server problem (' + response.status + '): ' + (message || 'no details') +
       ' — see Apps Script → Executions');
+    err.retryable = true;              // usually temporary on Google's side
+    throw err;
   }
   if (!data.ok) {
     // Lesson 9: session missing/expired → back to the login screen
@@ -1306,14 +1333,43 @@ async function startup() {
   if (!sessionToken) { showLoginScreen(); return; }   // never signed in on this browser
 
   try {
-    const data = await callApi('me');      // is the saved session still valid?
+    showStartup('Loading…');
+    const data = await callApi('me');      // is the saved session still valid? (retries by itself)
     await startApp(data);                  // yes → straight in, no login needed
   } catch (err) {
-    // callApi already showed the login screen for an expired session.
-    // Any other problem (e.g. no internet): show it on the login screen.
-    if (document.getElementById('loginScreen').hidden) showLoginScreen('Could not reach the server: ' + err.message);
+    // Lesson 13: ONLY an 'AUTH' answer means "log in again" — callApi already handled that.
+    // Anything else (no signal, Google hiccup) must NOT throw away a good session:
+    // keep the cookie and offer "Try again".
+    if (err.code === 'AUTH' || err.code === 'PENDING') return;
+    showStartup('Could not reach the library: ' + err.message, true);
   }
 }
+
+// The startup screen: a message, and optionally a "Try again" button
+function showStartup(message, withRetry) {
+  const box = document.getElementById('startupScreen');
+  box.innerHTML = '';
+  const p = document.createElement('p');
+  p.textContent = message;
+  box.append(p);
+  if (withRetry) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'retry-button';
+    button.textContent = '↻ Try again';
+    button.onclick = startup;
+    box.append(button);
+  }
+  showScreen('startup');
+}
+
+// Coming back to the tab after a while (phone unlocked, app switched back):
+// quietly check the session instead of failing on the next click.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && currentUser && sessionToken) {
+    callApi('me').catch(() => { /* callApi shows the login screen only for a real AUTH answer */ });
+  }
+});
 
 // ------------------------------------------------------------------
 // Lesson 11: "already in the library?" warning
