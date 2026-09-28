@@ -761,13 +761,10 @@ function testGemini() {
 
 // ONE list, used by the AI prompts AND sent to the browser for the category picker.
 const BOOK_CATEGORIES = [
-  'Novel', 'Short Stories', 'Poetry', 'Classic', 'Children', 'Young Adult',
+  'Novel', 'Short Stories', 'Poetry', 'Classic', 'Children',
   'Mystery & Thriller', 'Romance', 'Science Fiction & Fantasy', 'Historical Fiction',
-  'Biography & Memoir', 'History', 'Religion & Philosophy', 'Buddhism', 'Politics & Society',
-  'Psychology', 'Self-help', 'Health & Wellness', 'Business & Management', 'Economics & Finance',
-  'Science', 'Technology', 'Programming', 'Software Engineering', 'Security', 'Data & AI',
-  'Education & Reference', 'Language & Linguistics', 'Travel', 'Art & Photography', 'Cooking',
-  'Comics'
+  'Biography & Memoir', 'History', 'Buddhism', Natural beauty,
+  'Science', 'Technology', 'Education & Reference', 'Language & Linguistics', Bengali, Russian, War
 ];
 
 /**
