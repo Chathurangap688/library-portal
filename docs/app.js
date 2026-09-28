@@ -157,6 +157,7 @@ function applyFilters() {
   const onlyTranslations = document.getElementById('onlyTranslations').checked;
   const pickedCategories = selectedFilterCategories();
   const onlyAvailable = document.getElementById('onlyAvailable').checked;   // Lesson 14
+  const hideRead = document.getElementById('hideRead').checked;             // Lesson 18
 
   const result = books.filter(book => {
     // 1. Search: exact text (works for Sinhala typing) OR the loose Singlish key
@@ -178,10 +179,16 @@ function applyFilters() {
     // 5. Lesson 14: "In stock only" hides books whose copies are all lent out
     const matchesStock = !onlyAvailable || book.available === undefined || book.available > 0;
 
-    return matchesSearch && matchesLanguage && matchesTranslation && matchesCategory && matchesStock;
+    // 6. Lesson 18: "Hide books I've read" — uses MY status (myData from Lesson 5)
+    const matchesUnread = !hideRead || myData.status[book.id] !== 'read';
+
+    return matchesSearch && matchesLanguage && matchesTranslation && matchesCategory && matchesStock &&
+      matchesUnread;
   });
 
-  document.getElementById('count').textContent = `Showing ${result.length} of ${books.length} books`;
+  const readCount = books.filter(b => myData.status[b.id] === 'read').length;
+  document.getElementById('count').textContent = `Showing ${result.length} of ${books.length} books` +
+    (hideRead && readCount ? ` · ${readCount} read book${readCount === 1 ? '' : 's'} hidden` : '');
   renderBooks(result);
 }
 
@@ -190,6 +197,13 @@ document.getElementById('search').addEventListener('input', applyFilters);   // 
 document.getElementById('language').addEventListener('change', applyFilters);
 document.getElementById('onlyTranslations').addEventListener('change', applyFilters);
 document.getElementById('onlyAvailable').addEventListener('change', applyFilters);
+
+// Lesson 18: remember "Hide books I've read" on this device
+try { document.getElementById('hideRead').checked = localStorage.getItem('hideRead') === 'yes'; } catch (e) { /* ignore */ }
+document.getElementById('hideRead').addEventListener('change', event => {
+  try { localStorage.setItem('hideRead', event.target.checked ? 'yes' : 'no'); } catch (e) { /* ignore */ }
+  applyFilters();
+});
 
 // ------------------------------------------------------------------
 // Category filter (multi-select dropdown)
