@@ -8,6 +8,7 @@
 const SHEET_NAME = 'Books';
 
 function doGet(e) {
+  MEMO = {};
   // Lesson 9: the library is private now. Books are only sent to signed-in users (doPost 'books').
   return jsonResponse({ ok: false, error: 'Please sign in', code: 'AUTH' });
 }
@@ -22,11 +23,11 @@ function booksFor(user) {
 
 /** Reads every row of the Books sheet and turns it into a book object. */
 function readBooks() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  const sheet = booksSheet();
   if (!sheet) throw new Error('No sheet called "' + SHEET_NAME + '"');
 
   // getValues() gives a 2D array: [ [row1 cells], [row2 cells], ... ]
-  const rows = sheet.getDataRange().getValues();
+  const rows = sheetValues(sheet);  // Lesson 20: remembered for the rest of the request
   const headers = rows[0];          // first row = column names: id, title, author, ...
   const dataRows = rows.slice(1);   // everything after the header
 
@@ -79,15 +80,20 @@ function testReadBooks() {
  * Body (JSON text): { "action": "me", "idToken": "eyJ..." }
  */
 function doPost(e) {
+  MEMO = {};                                    // Lesson 20: fresh memory for every request
+  const started = Date.now();
+  let action = '?';
   try {
     const request = JSON.parse(e.postData.contents);
+    action = request.action;
 
     // Lesson 9: sign in ONCE with the Google ID token → we give back our own session token
     if (request.action === 'login') {
       const user = verifyUser(request.idToken);          // Google says who this is
       const session = createSession(user.email);         // our own 30-day "ticket"
-      return jsonResponse({ ok: true, sessionToken: session.token, expiresAt: session.expiresAt,
-        user: user, myData: user.status === 'active' ? getMyData(user.email) : null });
+      // Lesson 20: send everything the app needs to start, so no extra requests are needed
+      return jsonResponse(Object.assign({ ok: true, sessionToken: session.token,
+        expiresAt: session.expiresAt }, bundleFor(user)));
     }
 
     // EVERY other action needs a valid session (throws code 'AUTH' if missing or expired)
@@ -100,6 +106,9 @@ function doPost(e) {
     if (request.action === 'me') {                      // allowed for pending users too
       return jsonResponse({ ok: true, user: user,
         myData: user.status === 'active' ? getMyData(user.email) : null });
+    }
+    if (request.action === 'start') {                   // Lesson 20: me + books + recommend + users in ONE request
+      return jsonResponse(Object.assign({ ok: true }, bundleFor(user)));
     }
 
     // Lesson 10: everything below needs an ACTIVE account
@@ -181,7 +190,27 @@ function doPost(e) {
   } catch (err) {
     // code 'AUTH' tells the browser "show the login screen again"
     return jsonResponse({ ok: false, error: err.message, code: err.code || '', details: err.details || null });
+  } finally {
+    // Lesson 20: see how long each request takes in Apps Script → Executions
+    console.log(action + ' took ' + (Date.now() - started) + ' ms');
   }
+}
+
+/**
+ * Lesson 20: everything the app needs when it opens, in one answer.
+ * Before, the browser asked 4 times (me, books, recommend, listUsers) and every
+ * request paid Google's start-up cost again (a few seconds each).
+ */
+function bundleFor(user) {
+  if (user.status !== 'active') return { user: user, myData: null };   // pending: nothing else
+  const bundle = { user: user, myData: getMyData(user.email) };
+  const list = booksFor(user);
+  bundle.books = list.books;
+  bundle.categories = list.categories;
+  try { bundle.recommendations = recommendBooks(user.email, 8); }
+  catch (err) { bundle.recommendations = []; console.warn('recommend failed: ' + err.message); }
+  if (user.role === 'admin') bundle.users = listUsers();
+  return bundle;
 }
 
 function jsonResponse(obj) {
@@ -249,9 +278,12 @@ function publicUser(u) {
 
 /** Adds any missing header columns at the end of row 1. Returns the full header row. */
 function ensureColumns(sheet, wanted) {
-  const headers = sheet.getDataRange().getValues()[0];
+  const headers = sheetValues(sheet)[0];
   const missing = wanted.filter(h => !headers.includes(h));
-  if (missing.length) sheet.getRange(1, headers.length + 1, 1, missing.length).setValues([missing]);
+  if (missing.length) {
+    sheet.getRange(1, headers.length + 1, 1, missing.length).setValues([missing]);
+    forgetSheet(sheet);
+  }
   return headers.concat(missing);
 }
 
@@ -318,18 +350,40 @@ const STATUSES = ['to_read', 'reading', 'read'];
 
 /** Returns the sheet, creating it with a header row if it does not exist yet. */
 function getSheet(name, headers) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName(name);
+  if (MEMO['s:' + name]) return MEMO['s:' + name];
+  let sheet = ss_().getSheetByName(name);
   if (!sheet) {
-    sheet = ss.insertSheet(name);
+    sheet = ss_().insertSheet(name);
     sheet.appendRow(headers);
   }
-  return sheet;
+  return (MEMO['s:' + name] = sheet);
 }
 
+// =====================================================================
+// Lesson 20: speed — read each sheet at most ONCE per request
+// Reading a sheet is the slowest thing we do (a network call to Google Sheets).
+// Before, opening the app read "Books" 3 times and "Ratings" twice. Now the first read
+// is remembered in MEMO for the rest of the request; any write forgets it again.
+// =====================================================================
+let MEMO = {};                         // reset at the start of every doGet/doPost
+
+function booksSheet() { return MEMO.books || (MEMO.books = ss_().getSheetByName(SHEET_NAME)); }
+
+function ss_() { return MEMO.ss || (MEMO.ss = SpreadsheetApp.getActiveSpreadsheet()); }
+
+/** All cells of a sheet (a copy, so callers can change it safely). fresh = skip the memory. */
+function sheetValues(sheet, fresh) {
+  const key = 'v:' + sheet.getName();
+  if (fresh || !MEMO[key]) MEMO[key] = sheet.getDataRange().getValues();
+  return MEMO[key].map(row => row.slice());
+}
+
+/** Call after writing to a sheet: the remembered copy is out of date now. */
+function forgetSheet(sheet) { delete MEMO['v:' + sheet.getName()]; }
+
 /** Turns a sheet into an array of objects using the header row (like readBooks). */
-function readRows(sheet) {
-  const rows = sheet.getDataRange().getValues();
+function readRows(sheet, fresh) {
+  const rows = sheetValues(sheet, fresh);
   const headers = rows[0];
   return rows.slice(1).map(row => {
     const obj = {};
@@ -347,7 +401,7 @@ function upsertRow(sheet, matches, newValues) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);                  // wait up to 10 s for our turn
   try {
-    const rows = readRows(sheet);
+    const rows = readRows(sheet, true);  // inside the lock: always the LATEST data, never the memory
     const index = rows.findIndex(matches);
     // +2: one for the header row, one because sheet rows start at 1.
     // Not found → the first empty row after the data.
@@ -358,6 +412,7 @@ function upsertRow(sheet, matches, newValues) {
     range.setNumberFormat('@');
     range.setValues([newValues]);
   } finally {
+    forgetSheet(sheet);                  // Lesson 20: the remembered copy is old now
     lock.releaseLock();                  // ALWAYS give the lock back, even after an error
   }
 }
@@ -366,12 +421,13 @@ function deleteRowsWhere(sheet, matches) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    const rows = readRows(sheet);
+    const rows = readRows(sheet, true);
     // Delete from the bottom up, so earlier row numbers do not shift
     for (let i = rows.length - 1; i >= 0; i--) {
       if (matches(rows[i])) sheet.deleteRow(i + 2);
     }
   } finally {
+    forgetSheet(sheet);
     lock.releaseLock();
   }
 }
@@ -472,10 +528,11 @@ function requireAdmin(user) {
 
 /** Adds any BOOK_FIELDS columns that the sheet does not have yet. Returns the header row. */
 function ensureBookColumns(sheet) {
-  const headers = sheet.getDataRange().getValues()[0];
+  const headers = sheetValues(sheet)[0];
   const missing = BOOK_FIELDS.filter(f => !headers.includes(f));
   if (missing.length) {
     sheet.getRange(1, headers.length + 1, 1, missing.length).setValues([missing]);
+    forgetSheet(sheet);
   }
   return headers.concat(missing);
 }
@@ -485,7 +542,7 @@ function saveBook(user, input, imageBase64) {
   const title = String(input.title || '').trim();
   if (!title) throw new Error('Title is required');
 
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  const sheet = booksSheet();
   const headers = ensureBookColumns(sheet);
   const now = new Date().toISOString();
   const isNew = !input.id;
@@ -548,7 +605,7 @@ function deleteBook(bookId) {
     throw new Error('This book is lent out. Mark it as returned before deleting it.');
   }
   const same = r => String(r.bookId) === String(bookId);
-  deleteRowsWhere(SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME), r => String(r.id) === String(bookId));
+  deleteRowsWhere(booksSheet(), r => String(r.id) === String(bookId));
   // Also remove its reading status + ratings, so no "orphan" rows are left behind
   deleteRowsWhere(getSheet('Reading', ['email', 'bookId', 'status', 'updatedAt']), same);
   deleteRowsWhere(getSheet('Ratings', ['bookId', 'email', 'userName', 'rating', 'review', 'updatedAt']), same);
@@ -1309,7 +1366,7 @@ function findDuplicates(input, excludeId) {
 
 /** +1 copy of an existing book (no new row, no new photo in Drive). */
 function addCopy(bookId) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  const sheet = booksSheet();
   const headers = ensureBookColumns(sheet);
   const book = readRows(sheet).find(r => String(r.id) === String(bookId));
   if (!book) throw new Error('Book not found');

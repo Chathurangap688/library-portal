@@ -342,6 +342,15 @@ function sinhalaToLatin(text) {
 // Lesson 3: download the books from the Google Sheet (via Apps Script).
 // `async` lets us use `await` = "wait for this to finish, then continue".
 // ------------------------------------------------------------------
+// Lesson 20: used by loadBooks() AND by startApp() when the books came in the 'start' answer
+function applyBooksData(data) {
+  books = data.books;                           // 3. store the list
+  allCategories = data.categories || [];
+  buildCategoryFilter();
+  if (isAdmin()) updateLoanBadge();             // Lesson 14
+  applyFilters();                               // 4. draw it
+}
+
 async function loadBooks() {
   const count = document.getElementById('count');
 
@@ -356,12 +365,7 @@ async function loadBooks() {
   count.textContent = 'Loading books…';
   try {
     // Lesson 9: books are private → ask with our session (admins automatically get purchase info)
-    const data = await callApi('books');
-    books = data.books;                           // 3. store the list
-    allCategories = data.categories || [];
-    buildCategoryFilter();
-    if (isAdmin()) updateLoanBadge();             // Lesson 14
-    applyFilters();                               // 4. draw it
+    applyBooksData(await callApi('books'));
   } catch (err) {
     // Network down, wrong URL, script error… show it instead of a blank page
     count.textContent = 'Could not load books: ' + err.message;
@@ -383,7 +387,7 @@ function isAdmin() { return currentUser !== null && currentUser.role === 'admin'
 // request, so the browser does not send an extra CORS "preflight" (Apps Script can't answer those).
 // Lesson 13: actions that only READ data are safe to repeat if the network hiccups
 // (analyzeCover / webLookup only read and ask the AI — they save nothing, so a retry is harmless)
-const SAFE_TO_RETRY = ['me', 'books', 'recommend', 'listUsers', 'checkDuplicates', 'listLoans', 'analyzeCover', 'webLookup'];
+const SAFE_TO_RETRY = ['start', 'me', 'books', 'recommend', 'listUsers', 'checkDuplicates', 'listLoans', 'analyzeCover', 'webLookup'];
 
 async function callApi(action, params = {}) {
   const tries = SAFE_TO_RETRY.includes(action) ? 3 : 1;
@@ -507,10 +511,17 @@ async function startApp(data) {
   myData = data.myData || { status: {}, ratings: {} };
   showUser();
   showScreen('app');
-  await loadBooks();
-  loadRecommendations();          // Lesson 8 (no await)
-  if (isAdmin()) refreshPendingBadge();   // Lesson 10
-  if (isAdmin()) updateLoanBadge();       // Lesson 14
+  // Lesson 20: a new server sends books, recommendations and users in the SAME answer
+  // (login / start). An old server does not → ask for them separately like before.
+  if (data.books) applyBooksData(data); else await loadBooks();
+  if (data.recommendations) renderRecommendations(data.recommendations); else loadRecommendations();
+  if (isAdmin()) {
+    if (data.users) {
+      setPendingBadge(data.users.filter(u => u.status === 'pending').length);
+      rememberActiveUsers(data.users);
+    } else refreshPendingBadge();         // Lesson 10
+    updateLoanBadge();                    // Lesson 14
+  }
 }
 
 // ------------------------------------------------------------------
@@ -1402,9 +1413,18 @@ async function loadRecommendations() {
   const section = document.getElementById('recommendSection');
   if (!currentUser) { section.hidden = true; return; }
   try {
-    const data = await callApi('recommend');
+    renderRecommendations((await callApi('recommend')).recommendations);
+  } catch (err) {
+    console.error('Recommendations failed:', err);
+    section.hidden = true;                         // a "nice to have" — never break the page
+  }
+}
+
+function renderRecommendations(list) {
+  const section = document.getElementById('recommendSection');
+  try {
     // The server sends only { bookId, score, reason } → look up the full book here
-    const items = data.recommendations
+    const items = list
       .map(r => ({ book: books.find(b => String(b.id) === r.bookId), reason: r.reason }))
       .filter(item => item.book);                  // skip if the book is not in our list
     section.hidden = items.length === 0;
@@ -1443,7 +1463,13 @@ async function startup() {
 
   try {
     showStartup('Loading…');
-    const data = await callApi('me');      // is the saved session still valid? (retries by itself)
+    // Lesson 20: 'start' = "is my session valid?" + books + recommendations, in ONE request
+    let data;
+    try { data = await callApi('start'); }
+    catch (err) {
+      if (!/Unknown action/.test(err.message)) throw err;
+      data = await callApi('me');          // the server is still the old version
+    }
     await startApp(data);                  // yes → straight in, no login needed
   } catch (err) {
     // Lesson 13: ONLY an 'AUTH' answer means "log in again" — callApi already handled that.
